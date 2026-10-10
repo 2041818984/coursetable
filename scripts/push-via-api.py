@@ -18,7 +18,10 @@
 Windows 上 core.autocrlf=true 会把工作区变成 CRLF，直接读磁盘会
 把 CRLF 写进仓库、并让 blob sha 对不上，导致每次都重复上传同一个文件。
 
-凭据：先读环境变量 GH_TOKEN，没有就用 `git credential fill` 向系统凭据管理器要。
+凭据：先读环境变量 GH_TOKEN；没有就问系统凭据管理器，依次试
+`git credential fill` 和 `git-credential-manager get`（后者是必要的——
+本仓库 credential.helper 是 helper-selector，`git credential fill`
+经常直接报 fatal: could not read Username，但 GCM 自己拿得到同一份凭据）。
 
 用法：
     python scripts/push-via-api.py <远端当前 main 的 sha> [本地提交，默认 HEAD]
@@ -51,15 +54,29 @@ def get_token():
     tok = os.environ.get('GH_TOKEN')
     if tok:
         return tok.strip()
-    out = sh(['git', 'credential', 'fill'],
-             input='protocol=https\nhost=github.com\n\n')
-    if out.returncode != 0:
-        print('git credential fill 失败：' + out.stderr.strip())
-        sys.exit(1)
-    for line in out.stdout.splitlines():
-        if line.startswith('password='):
-            return line[len('password='):].strip()
-    print('凭据里没有 password 字段')
+
+    # 该仓库的 credential.helper 是 helper-selector（选中了 GCM）。实践中
+    # `git credential fill` 有时会因为拿不到用户名而直接失败
+    # （fatal: could not read Username，且 GIT_TERMINAL_PROMPT=0 不给重试），
+    # 但同一份凭据 GCM 自己是拿得到的，所以两条路都试。
+    attempts = [
+        (['git', 'credential', 'fill'], 'git credential fill'),
+        (['git-credential-manager', 'get'], 'git-credential-manager get'),
+    ]
+    for args, label in attempts:
+        try:
+            out = subprocess.run(args, input='protocol=https\nhost=github.com\n\n',
+                                 capture_output=True, text=True)
+        except FileNotFoundError:
+            continue
+        if out.returncode != 0:
+            continue
+        for line in out.stdout.splitlines():
+            if line.startswith('password='):
+                return line[len('password='):].strip()
+
+    print('拿不到 GitHub 凭据。试过：' + '、'.join(l for _, l in attempts))
+    print('可以手动传：GH_TOKEN=<token> python scripts/push-via-api.py <父提交>')
     sys.exit(1)
 
 
