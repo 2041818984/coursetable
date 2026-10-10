@@ -1,33 +1,51 @@
 /* import-jw.js —— 正方教务系统直连抓取
  *
- * 说明：以下接口路径来自正方教务系统公开流传的通用约定（/jwglxt 新版、/jsxsd 旧版）。
- * 不同学校的部署版本、路径、字段名差异很大，因此所有路径都做成可探测 + 可手动覆盖，
- * 抓不到时应改用「图片识别 / 文件导入」，不要假设一定能通。
+ * 路径来自正方教务系统的公开约定（/jwglxt 新版、/jsxsd 旧版），
+ * 并用海南热带海洋学院（zfjw.hntou.edu.cn）实测校正过。
+ *
+ * 实测结论（2026-10，该校 /jwglxt 新版）：
+ *   1. 登录页 action = /jwglxt/xtgl/login_slogin.html?time=<毫秒>
+ *   2. 密码必须 RSA 加密：PKCS#1 v1.5 填充，密文 base64。
+ *      公钥 /jwglxt/xtgl/login_getPublicKey.html 返回的 modulus/exponent 是 base64。
+ *   3. 验证码图片在 /jwglxt/kaptcha（不是 verifycode.servlet）。
+ *   4. dlsfbxyzm=0 → 该校**默认不要验证码**；验证码框 #yzmDiv 平时隐藏，
+ *      连错 yzcskz(=3) 次才出现。所以「不弹验证码」是正常的，不是坏了。
+ *   5. dlsbsdsj=3 → 连错 3 次锁定 3 分钟。因此 App 绝不自动重试密码。
+ *   6. 未登录访问受保护路径返回自定义状态码 901（不是 302）。
+ *   7. 该校服务器会间歇性不响应（疑似限流），所以请求要节流 + 重试。
+ *
+ * 不同学校部署差异很大，路径仍做成可探测 + 可手动覆盖，
+ * 抓不到时应改用「图片识别 / 文件导入」。
  */
 (function (global) {
   'use strict';
 
   var P = (global.Capacitor && global.Capacitor.Plugins) || {};
 
+  /* 常见学校的教务地址，仅用于一键填入 */
+  var SCHOOL_PRESETS = [
+    { name: '海南热带海洋学院', base: 'http://zfjw.hntou.edu.cn' }
+  ];
+
   var PATHS = {
     jwglxt: {
       loginPage: '/jwglxt/xtgl/login_slogin.html',
       pubkey: ['/jwglxt/xtgl/login_getPublicKey.html'],
       code: [
+        '/jwglxt/kaptcha',                          // 新版正方标准位置（实测确认）
         '/jwglxt/verifycode.servlet',
         '/jwglxt/xtgl/login_getVerifyCode.html',
         '/jwglxt/xtgl/login_captcha.html',
         '/jwglxt/CheckCode.aspx',
         '/jwglxt/img/captcha.jpg',
-        '/jwglxt/verifyCode.servlet',
-        '/jwglxt/captcha',
-        '/jwglxt/code'
+        '/jwglxt/captcha'
       ],
       kb: [
+        // 权威写法：kbcx 目录 + gnmkdm=N2151，且 body 要带 kzlx=ck
+        '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2151',
         '/jwglxt/xskbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2535',
-        '/jwglxt/xskbcx/xskbcx_cxXsKb.html?gnmkdm=N2535',
-        '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2535',
-        '/jwglxt/xskbcx/xskbcx_cxXsgrkb.html'
+        '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N253508',
+        '/jwglxt/xskbcx/xskbcx_cxXsKb.html?gnmkdm=N2535'
       ]
     },
     jsxsd: {
@@ -131,6 +149,45 @@
 
   var UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36';
 
+  /* ---------- 请求节流 ----------
+     实测：该校服务器在短时间连发若干请求后会直接不响应（连登录页都超时）。
+     所以把所有请求串成一条链，两次之间至少隔 THROTTLE_MS，并把
+     「不响应」视为可重试的临时故障。 */
+  var THROTTLE_MS = 400;
+  var queue = Promise.resolve();
+  var lastAt = 0;
+
+  function throttle() {
+    queue = queue.then(function () {
+      return new Promise(function (res) {
+        var now = Date.now();
+        var wait = Math.max(0, lastAt + THROTTLE_MS - now);
+        lastAt = now + wait;
+        setTimeout(res, wait);
+      });
+    });
+    return queue;
+  }
+
+  function isTransportError(e) {
+    var m = String((e && e.message) || e || '');
+    if (/HTTP\s*\d{3}/.test(m)) return false;      // 服务器给了明确状态码，不是传输问题
+    if (/CORS|跨域/.test(m)) return false;          // 浏览器环境，重试也没用
+    return true;
+  }
+
+  function httpRetry(opt, tries, log) {
+    return throttle().then(function () {
+      return Bridge.http(opt).catch(function (e) {
+        if (tries > 1 && isTransportError(e)) {
+          if (log) log('· 服务器没响应（本校偶发），重试…');
+          return httpRetry(opt, tries - 1, log);
+        }
+        throw e;
+      });
+    });
+  }
+
   function req(url, opt) {
     opt = opt || {};
     return withCookie(url, opt.headers).then(function (headers) {
@@ -143,46 +200,123 @@
       for (var k in headers) if (k !== 'Cookie') h[k] = headers[k];
       if (opt.referer) h['Referer'] = opt.referer;
 
-      return Bridge.http({
+      return httpRetry({
         url: url,
         method: opt.method || 'GET',
         headers: h,
-        data: opt.body,
+        data: opt.data,
         responseType: opt.responseType || 'text'
-      });
+      }, opt.tries || 3, opt.log);
     }).then(function (res) {
       return rememberSetCookie(url, res.headers).then(function () { return res; });
     });
   }
 
-  /* ---------- 读登录页：判断验证码类型、找出真实图片地址与隐藏字段 ----------
-     新版正方（V9 / 正方云）把字符验证码换成了滑块拼图，登录页里会出现
+  /* ---------- HTML 属性读取 ----------
+     正方页面里隐藏字段的值大多不带引号，形如 value= 1（等号后还有空格），
+     只按引号匹配会全部读成空。 */
+  function attrOf(tag, name) {
+    var m = String(tag).match(new RegExp('\\b' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]*))', 'i'));
+    if (!m) return null;
+    if (m[1] !== undefined) return m[1];
+    if (m[2] !== undefined) return m[2];
+    return m[3] === undefined ? null : m[3];
+  }
+
+  /**
+   * 把登录页里的表单字段全都抠出来。真实浏览器提交表单时会把所有
+   * hidden 字段一起带上（language / xxdm / mmsfjm 等），只发 yhm+mm
+   * 有些部署会被拒。
+   */
+  function parseLoginFields(html) {
+    var out = {
+      fields: {}, csrf: '', passwordEncrypted: null,
+      captchaForced: null, maxFail: null, lockMin: null
+    };
+    var re = /<input\b[^>]*>/gi, m;
+    while ((m = re.exec(html))) {
+      var tag = m[0];
+      var name = attrOf(tag, 'name');
+      if (!name) continue;
+      var v = attrOf(tag, 'value');
+      v = (v == null) ? '' : String(v).trim();
+      out.fields[name] = v;
+      if (name === 'csrftoken' && v) out.csrf = v;
+    }
+    // 兜底：有些模板把 csrftoken 写在 JS 里
+    if (!out.csrf) {
+      var c = html.match(/csrftoken['"]?\s*[:=]\s*['"]([^'"]+)['"]/i);
+      if (c) out.csrf = c[1];
+    }
+
+    function fld(k) {
+      var s = out.fields[k];
+      return (s === undefined || s === '') ? null : s;
+    }
+    out.passwordEncrypted = fld('mmsfjm') === '1';
+    // dlsfbxyzm: 1=必须验证码，0=默认不要（连错几次才出现），缺失=未知
+    var d = fld('dlsfbxyzm');
+    out.captchaForced = (d === '1') ? true : (d === '0' ? false : null);
+    out.maxFail = fld('yzcskz');
+    out.lockMin = fld('dlsbsdsj');
+    return out;
+  }
+
+  /* ---------- 读登录页 ----------
+     新版正方（V9 / 正方云）可能把字符验证码换成滑块拼图，登录页里会出现
      zfcaptchaLogin / zfdun 这类标记。滑块必须人工拖动，本 App 不做自动识别，
-     所以检测到就明确告诉用户换导入方式，而不是一路试到超时。 */
+     检测到就明确告诉用户换导入方式，而不是一路试到超时。
+     另外顺便读出「要不要验证码」「连错几次锁多久」，用于给用户提示。 */
+  function readLoginPage(html) {
+    var s = String(html == null ? '' : html);
+    var info = {
+      slider: false, codeUrl: '', csrf: '', len: s.length,
+      fields: {}, captchaForced: null, maxFail: null, lockMin: null,
+      passwordEncrypted: null
+    };
+    if (!s) return info;
+
+    if (/zfcaptchaLogin|zfdun|slider[-_]?bar|slideVerify|captcha_config/i.test(s)) {
+      info.slider = true;
+    }
+    var m = s.match(/['"]([^'"]*(?:kaptcha|verifycode|verifyCode|checkcode|CheckCode|validatecode|ValidateCode|imgcode)[^'"]*)['"]/);
+    if (m) info.codeUrl = m[1];
+
+    var parsed = parseLoginFields(s);
+    info.fields = parsed.fields;
+    info.csrf = parsed.csrf;
+    info.captchaForced = parsed.captchaForced;
+    info.maxFail = parsed.maxFail;
+    info.lockMin = parsed.lockMin;
+    info.passwordEncrypted = parsed.passwordEncrypted;
+    return info;
+  }
+
+  function describeLoginPage(info, log) {
+    if (!info) return;
+    log('登录页长度 ' + info.len + '，表单字段 ' + Object.keys(info.fields || {}).length + ' 个');
+    if (info.slider) log('⚠ 检测到滑块拼图验证码（新版正方常见）');
+    if (info.codeUrl) log('✔ 页面里的验证码图片：' + info.codeUrl);
+    if (info.csrf) log('✔ 找到 csrftoken');
+    if (info.passwordEncrypted === true) log('✔ 页面声明密码需 RSA 加密（mmsfjm=1）');
+    if (info.captchaForced === false) {
+      log('✔ 页面声明默认不要验证码（dlsfbxyzm=0）——验证码只在连错后出现');
+    } else if (info.captchaForced === true) {
+      log('⚠ 页面声明登录必须输验证码（dlsfbxyzm=1）');
+    }
+    if (info.maxFail && info.lockMin) {
+      log('⚠ 连错 ' + info.maxFail + ' 次将锁定 ' + info.lockMin + ' 分钟，App 不会自动重试密码');
+    }
+  }
+
   function inspectLoginPage(base, variant, log) {
     var rel = (PATHS[variant] || PATHS.jwglxt).loginPage;
     var url = base + rel;
     log('读取登录页：' + url);
-    return req(url, { method: 'GET', headers: { 'Accept': 'text/html' } })
+    return req(url, { method: 'GET', accept: 'text/html', log: log })
       .then(function (res) {
-        var html = String(res.data == null ? '' : res.data);
-        var info = { slider: false, codeUrl: '', csrf: '', len: html.length };
-        if (!html) return info;
-
-        if (/zfcaptchaLogin|zfdun|slider[-_]?bar|slideVerify|captcha_config/i.test(html)) {
-          info.slider = true;
-        }
-        var m = html.match(/['"]([^'"]*(?:verifycode|verifyCode|checkcode|CheckCode|validatecode|ValidateCode|imgcode)[^'"]*)['"]/);
-        if (m) info.codeUrl = m[1];
-        var c = html.match(/name=['"]csrftoken['"][^>]*value=['"]([^'"]*)['"]/i) ||
-          html.match(/csrftoken['"]?\s*[:=]\s*['"]([^'"]+)['"]/i);
-        if (c) info.csrf = c[1];
-
-        log('登录页长度 ' + html.length);
-        if (info.slider) log('⚠ 检测到滑块拼图验证码（新版正方常见）');
-        if (info.codeUrl) log('✔ 页面里的验证码图片：' + info.codeUrl);
-        if (info.csrf) log('✔ 找到 csrftoken');
-        if (!info.slider && !info.codeUrl) log('· 页面里没找到验证码痕迹，可能不需要验证码');
+        var info = readLoginPage(res.data);
+        describeLoginPage(info, log);
         return info;
       })
       .catch(function (e) {
@@ -204,9 +338,10 @@
     var i = 0;
     function next() {
       if (i >= list.length) return Promise.reject(new Error('没找到验证码接口，请在「高级」里手动填写'));
-      var url = base + list[i++] + (list[i - 1].indexOf('?') < 0 ? '?t=' + Date.now() : '');
+      var rel = list[i++];
+      var url = base + rel + (rel.indexOf('?') < 0 ? '?t=' + Date.now() : '');
       log('尝试验证码：' + url);
-      return req(url, { responseType: 'base64', accept: 'image/*' }).then(function (res) {
+      return req(url, { responseType: 'base64', accept: 'image/*', log: log }).then(function (res) {
         var d = res.data;
         var ct = (res.headers && (res.headers['Content-Type'] || res.headers['content-type']) || '').toLowerCase();
         var ok = typeof d === 'string' && d.length > 200 && (ct.indexOf('image') >= 0 || !/^[{<]/.test(atob(d.slice(0, 64))));
@@ -224,53 +359,79 @@
   function getPublicKey(base, variant, log) {
     var list = (PATHS[variant] || PATHS.jwglxt).pubkey;
     if (!list.length) return Promise.resolve(null);
-    return req(base + list[0] + '?t=' + Date.now(), {
+    return req(base + list[0] + '?time=' + Date.now(), {
       method: 'POST',
-      body: '',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      data: '',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      log: log
     }).then(function (res) {
       var d = res.data;
       if (typeof d === 'object') return d;
       try { return JSON.parse(d); } catch (e) { return null; }
     }).then(function (j) {
       if (j && (j.modulus || j.Modulus)) {
-        log('✔ 已获取 RSA 公钥（模数 ' + String(j.modulus || j.Modulus).length + ' 字符）');
-        return { modulus: j.modulus || j.Modulus, exponent: j.exponent || j.Exponent || 'AQAB' };
+        var mod = String(j.modulus || j.Modulus);
+        var bytes = Math.round(mod.length * 3 / 4);   // base64 → 字节
+        log('✔ 已获取 RSA 公钥（' + mod.length + ' 字符 base64，约 ' + bytes + ' 字节 ≈ ' +
+          (bytes * 8) + ' bit）');
+        return { modulus: mod, exponent: j.exponent || j.Exponent || 'AQAB' };
       }
       log('· 该站点未返回公钥，将按明文密码提交');
       return null;
     }).catch(function (e) { log('· 取公钥失败：' + e.message); return null; });
   }
 
-  /* ---------- 站点连通性：区分「地址错」与「该校无验证码」 ---------- */
-  function ping(base, log) {
-    log('检查教务地址连通性…');
-    return req(base + '/', { method: 'GET' }).then(function (res) {
-      if (!res) throw new Error('无响应');
-      if (res.status >= 400) throw new Error('HTTP ' + res.status);
-      log('✔ 教务地址可达（HTTP ' + res.status + '）');
-      return true;
-    }).catch(function (e) {
-      if (/无响应|HTTP/.test(e.message)) throw e;
-      throw new Error(e.message);
-    });
+  /* ---------- 站点连通性 ----------
+     只发这一个请求：登录页能打开，就说明地址对且网络通。
+     （很多学校根路径返回 404 或跳转，所以不拿根路径做判断；
+       该校服务器连发请求会不响应，所以也不额外 ping 一次。） */
+  function fetchLoginPage(base, variant, log) {
+    var rel = (PATHS[variant] || PATHS.jwglxt).loginPage;
+    var url = base + rel;
+    log('打开登录页：' + url);
+    return req(url, { method: 'GET', accept: 'text/html', log: log, tries: 3 })
+      .then(function (res) {
+        if (res.status === 901) {
+          throw new Error('教务系统返回「未登录」（HTTP 901），登录页读不到，请核对地址。');
+        }
+        log('✔ 登录页已打开（HTTP ' + res.status + '）');
+        return res.data;
+      })
+      .catch(function (e) {
+        throw new Error('打不开教务登录页：' + e.message +
+          '。请确认地址拼写正确、手机已连上校园网或学校 VPN。');
+      });
   }
 
-  function prepare(baseRaw, variant, log) {
+  function prepare(baseRaw, variant, log, opts) {
+    opts = opts || {};
     var base = normalizeBase(baseRaw);
     if (!base) return Promise.reject(new Error('请先填写教务地址'));
     var page = null;
-    return ping(base, log)
-      .then(function () { return inspectLoginPage(base, variant, log); })
+    return fetchLoginPage(base, variant, log)
+      .then(function (html) {
+        page = readLoginPage(html);
+        describeLoginPage(page, log);
+        return page;
+      })
       .then(function (info) {
-        page = info;
         if (info && info.slider) {
           throw new Error('这套教务用的是「滑块拼图」验证码（新版正方 / 正方云常见）。' +
             '滑块必须人工拖动，App 不做自动识别，所以自动登录这条路走不通。' +
-            '请改用「文件 / 网页导入」——教务导出的课表 PDF 可以直接读；' +
+            '请改用「文件 / 网页导入」（教务导出的课表 PDF 可以直接读），' +
             '或者用「图片识别」把课表截图导进来。');
         }
-        // 取不到验证码不代表失败：不少学校登录不需要验证码
+
+        // 页面明确声明「默认不要验证码」时就不去试那些接口了：
+        // 一来省掉好几个请求（该校服务器连发请求会不响应），
+        // 二来这类站点直接带空 yzm 提交是被接受的。
+        // forceCode：服务器已经明确要验证码了（比如连错后），此时必须去取图。
+        if (info && info.captchaForced === false && !opts.forceCode) {
+          log('· 跳过验证码探测（页面已声明不需要）');
+          return null;
+        }
+        if (opts.forceCode) log('· 服务器要求验证码，开始取图');
+        // 取不到验证码不代表失败：不少学校登录确实不需要验证码
         return detectCode(base, variant, log, info && info.codeUrl).catch(function (e) {
           log('· 未取到验证码（' + e.message + '），按「无需验证码」继续');
           return null;
@@ -280,66 +441,154 @@
         return getPublicKey(base, variant, log).then(function (k) {
           return {
             base: base,
+            variant: variant,
             captcha: c ? c.dataUrl : '',
+            captchaUrl: c ? c.url : '',
             needCode: !!c,
             pubkey: k,
-            csrf: (page && page.csrf) || ''
+            csrf: (page && page.csrf) || '',
+            fields: (page && page.fields) || {},
+            captchaForced: page ? page.captchaForced : null,
+            maxFail: page ? page.maxFail : null,
+            lockMin: page ? page.lockMin : null
           };
         });
       });
   }
 
+  /* ---------- 组装登录表单 ----------
+     照页面原样把 hidden 字段带上（language / xxdm / mmsfjm / csrftoken…），
+     再把 yhm / mm / yzm 填成我们的值。 */
+  function buildLoginBody(ctx, user, pwd, code) {
+    var parts = [];
+    var f = (ctx && ctx.fields) || {};
+    Object.keys(f).forEach(function (k) {
+      if (k === 'yhm' || k === 'mm' || k === 'yzm' || k === 'hidMm') return;
+      parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(f[k]));
+    });
+    parts.push('yhm=' + encodeURIComponent(user));
+    parts.push('mm=' + encodeURIComponent(pwd));
+    parts.push('yzm=' + encodeURIComponent(code || ''));
+    // 页面自带的 csrftoken 已经带上去了，别重复提交
+    if (ctx.csrf && !f.csrftoken) parts.push('csrftoken=' + encodeURIComponent(ctx.csrf));
+    return parts.join('&');
+  }
+
+  /* ---------- 判定登录响应 ----------
+     正方登录失败时是「重新渲染登录页 + 页面上一条提示」，
+     所以不能只看状态码，得看正文里的措辞。 */
+  function classifyLogin(res) {
+    var status = res && res.status;
+    var loc = (res && res.headers && (res.headers['Location'] || res.headers['location'])) || '';
+    var text = (res && typeof res.data === 'string') ? res.data : JSON.stringify((res && res.data) || '');
+
+    if (status === 901) return { kind: 'session', text: text };
+    if (/用户名或密码不正确|用户名或密码错误|密码错误|账号或密码|用户名不存在/.test(text)) {
+      return { kind: 'badpass', text: text };
+    }
+    if (/验证码/.test(text) && /不正确|错误|为空|请输入|失效/.test(text)) {
+      return { kind: 'captcha', text: text };
+    }
+    // 成功：通常 302 到首页，或响应里出现首页/菜单
+    if (/index_initMenu|index_initMenu\.html|initMenu/i.test(text) || /index_initMenu/i.test(loc)) {
+      return { kind: 'ok', text: text };
+    }
+    if (status >= 200 && status < 400 && !/<input[^>]*name=["']?mm/i.test(text)) {
+      return { kind: 'ok', text: text };
+    }
+    return { kind: 'unknown', text: text };
+  }
+
+  function lockHint(ctx) {
+    var n = ctx && ctx.maxFail, m = ctx && ctx.lockMin;
+    if (n && m) return '注意：本校连错 ' + n + ' 次会锁定 ' + m + ' 分钟，App 不会自动重试，请核对后再试。';
+    return '';
+  }
+
   /* ---------- 登录 ---------- */
   function login(ctx, user, pass, code, rsaMode, log) {
-    var variant = ctx.variant, base = ctx.base;
+    var base = ctx.base;
     var pwd = pass;
     if (ctx.pubkey) {
       try {
         pwd = Bridge.rsaEncrypt(pass, ctx.pubkey.modulus, ctx.pubkey.exponent, rsaMode);
-        log('✔ 密码已用 RSA 加密（' + (rsaMode === 'raw' ? '裸整数幂' : 'PKCS#1') + '）');
+        log('✔ 密码已用 RSA 加密（' + (rsaMode === 'raw' ? '裸整数幂' : 'PKCS#1 v1.5') +
+          '，密文 ' + pwd.length + ' 字符）');
       } catch (e) {
         log('✘ 加密失败：' + e.message + '，改为明文提交');
         pwd = pass;
       }
+    } else {
+      log('· 未取到公钥，按明文提交（若提示密码错误，可到「高级」换加密方式）');
     }
-    var loginUrl = base + (PATHS[variant] || PATHS.jwglxt).loginPage;
-    var body = 'yhm=' + encodeURIComponent(user) + '&mm=' + encodeURIComponent(pwd) + '&yzm=' + encodeURIComponent(code || '');
-    // 新版正方登录页带 csrftoken 隐藏字段，登录时必须原样带回
-    if (ctx.csrf) body += '&csrftoken=' + encodeURIComponent(ctx.csrf);
+    var loginUrl = base + (PATHS[ctx.variant] || PATHS.jwglxt).loginPage +
+      '?time=' + Date.now();   // 页面自己也会加时间戳，防止代理缓存
+    var body = buildLoginBody(ctx, user, pwd, code);
     log('登录 → ' + loginUrl);
+    if (code) log('· 本次带验证码：' + code);
     return req(loginUrl, {
       method: 'POST',
-      body: body,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
-      referer: base
+      data: body,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      referer: base + (PATHS[ctx.variant] || PATHS.jwglxt).loginPage,
+      log: log
     }).then(function (res) {
-      var t = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-      if (/验证码|yzm|不正确|错误/.test(t) && t.length < 800) {
-        throw new Error('登录被拒：' + t.slice(0, 120));
+      var r = classifyLogin(res);
+      if (r.kind === 'ok') {
+        log('✔ 登录成功（HTTP ' + res.status + '）');
+        return res;
       }
-      if (/用户名或密码|密码错误|账号或密码/.test(t)) throw new Error('学号或密码不正确');
-      log('✔ 登录请求已发送（' + res.status + '），响应长度 ' + t.length);
-      return res;
+      if (r.kind === 'badpass') {
+        throw new Error('学号或密码不正确。' + (lockHint(ctx) || '请确认后再试一次。'));
+      }
+      if (r.kind === 'captcha') {
+        var err = new Error('这套教务要求验证码，请先点「①」取一张图再填。');
+        err.needCode = true;
+        throw err;
+      }
+      if (r.kind === 'session') {
+        throw new Error('教务系统返回「未登录 / 会话失效」（HTTP 901）。' +
+          '说明这次没真正登录成功，请核对学号密码；若反复出现，改用图片或文件导入。');
+      }
+      throw new Error('登录结果无法判断（HTTP ' + res.status + '）。' +
+        (lockHint(ctx) || '请改用图片或文件导入。'));
     });
   }
 
   /* ---------- 抓课表 ---------- */
   function fetchKb(ctx, user, xnm, xqm, log) {
-    var variant = ctx.variant, base = ctx.base;
-    var list = (PATHS[variant] || PATHS.jwglxt).kb;
+    var base = ctx.base;
+    var list = (PATHS[ctx.variant] || PATHS.jwglxt).kb;
     var i = 0;
     function next() {
-      if (i >= list.length) return Promise.reject(new Error('课表接口都试过了，未取到数据'));
+      if (i >= list.length) {
+        throw new Error('课表接口都试过了，未取到数据。' +
+          '请改用「文件 / PDF 导入」，或把课表页面截图后用「图片识别」。');
+      }
       var path = list[i++].replace('{user}', encodeURIComponent(user));
       var url = base + path;
-      var body = xnm ? ('xnm=' + encodeURIComponent(xnm) + '&xqm=' + encodeURIComponent(xqm)) : '';
+      // 实测：kzlx=ck 是必须带的（kzlx 为空会被当成「监控」视图而不返回数据）
+      var body = 'xnm=' + encodeURIComponent(xnm || '') +
+        '&xqm=' + encodeURIComponent(xqm || '') +
+        '&kzlx=ck';
       log('抓课表 → ' + url);
       return req(url, {
         method: 'POST',
-        body: body,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
-        referer: base + path
+        data: body,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        referer: base + path,
+        log: log
       }).then(function (res) {
+        if (res.status === 901) {
+          throw new Error('抓课表时教务系统说「未登录」（HTTP 901）。' +
+            '登录没有真正生效，请核对学号密码后重试。');
+        }
         var d = res.data;
         var j = null;
         if (typeof d === 'object' && d) j = d;
@@ -347,18 +596,26 @@
 
         if (j && j.kbList && j.kbList.length) { log('✔ 取到 ' + j.kbList.length + ' 条课程记录'); return j.kbList; }
         if (j && j.timetable && j.timetable.length) return j.timetable;
-        if (j && Array.isArray(j)) { if (j.length) { log('✔ 取到数组 ' + j.length + ' 条'); return j; } }
+        if (Array.isArray(j) && j.length) { log('✔ 取到数组 ' + j.length + ' 条'); return j; }
 
         // 可能是 HTML 页面（旧版 jsxsd），交给表格解析
         if (typeof d === 'string' && /<t[dhr]/i.test(d)) {
+          if (/name=["']?mm|login_slogin|请输入|用户登录/.test(d) && !/kbList/.test(d)) {
+            throw new Error('抓课表返回的是登录页，说明会话已失效。请重新登录。');
+          }
           log('· 返回的是 HTML 页面，转为表格解析');
           return { __html: d };
         }
         log('✘ ' + url + ' 未返回课表数据');
         return next();
-      }).catch(function (e) { log('✘ ' + e.message); return next(); });
+      }).catch(function (e) {
+        // 会话类错误不要盲目换下一个地址，直接抛给用户
+        if (/901|未登录|会话/.test(e.message)) throw e;
+        log('✘ ' + e.message);
+        return next();
+      });
     }
-    return next();
+    return Promise.resolve().then(next);
   }
 
   /**
@@ -403,7 +660,7 @@
         while (grid[ri][ci]) ci++;
         var cs = parseInt(cell.getAttribute('colspan') || '1', 10);
         var rs = parseInt(cell.getAttribute('rowspan') || '1', 10);
-        var txt = (cell.innerText || cell.textContent || '').replace(/ /g, ' ').trim();
+        var txt = (cell.innerText || cell.textContent || '').replace(/\u00a0/g, ' ').trim();
         for (var r2 = ri; r2 < ri + rs; r2++) {
           for (var c2 = ci; c2 < ci + cs; c2++) { ensure(r2, c2); if (r2 === ri && c2 === ci) grid[r2][c2] = txt; else if (!grid[r2][c2]) grid[r2][c2] = txt; }
         }
@@ -420,9 +677,16 @@
 
   global.JwImport = {
     PATHS: PATHS,
+    SCHOOL_PRESETS: SCHOOL_PRESETS,
+    THROTTLE_MS: THROTTLE_MS,
     normalizeBase: normalizeBase,
+    attrOf: attrOf,
+    parseLoginFields: parseLoginFields,
+    readLoginPage: readLoginPage,
     inspectLoginPage: inspectLoginPage,
     detectCode: detectCode,
+    buildLoginBody: buildLoginBody,
+    classifyLogin: classifyLogin,
     prepare: prepare,
     run: run,
     htmlToMatrix: htmlToMatrix,

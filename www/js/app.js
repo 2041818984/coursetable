@@ -375,14 +375,39 @@
     if (state === 'empty') tip.innerHTML = '点下方<br>① 取图';
   }
 
+  // 把「要不要验证码」「连错几次锁多久」这类页面自述信息讲给用户
+  function jwNotes(ctx) {
+    var el = $('jwNote');
+    var lines = [];
+    if (ctx && ctx.maxFail && ctx.lockMin) {
+      lines.push('⚠ 本校连错 ' + ctx.maxFail + ' 次会锁定 ' + ctx.lockMin +
+        ' 分钟，App 不会自动重试，请核对好学号密码再点登录。');
+    }
+    if (ctx && ctx.captchaForced === false && !ctx.needCode) {
+      lines.push('✔ 本校登录默认不需要验证码，填好学号密码直接点 ② 就行。');
+    }
+    if (ctx && ctx.pubkey) {
+      lines.push('· 密码会先用教务系统的公钥加密再提交（RSA / PKCS#1 v1.5）。');
+    }
+    if (lines.length) {
+      el.innerHTML = lines.map(function (s) {
+        return '<div>' + s.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</div>';
+      }).join('');
+      el.classList.add('show');
+    } else {
+      el.classList.remove('show');
+    }
+  }
+
   function jwReset() {
     state.jwCtx = null;
     $('jwCaptcha').src = '';
     $('jwCapRow').style.display = '';
+    $('jwNote').classList.remove('show');
     setCap('empty');
   }
 
-  function jwPrepare() {
+  function jwPrepare(forceCode) {
     var baseRaw = $('jwBase').value.trim() || S.settings().jw.base;
     var variant = $('jwVariant').value;
     clearLog($('jwLog'));
@@ -396,7 +421,8 @@
     S.settings().jw.variant = variant;
     S.save();
 
-    JwImport.prepare(baseRaw, variant, function (m) { log($('jwLog'), m); })
+    JwImport.prepare(baseRaw, variant, function (m) { log($('jwLog'), m); },
+      { forceCode: !!forceCode })
       .then(function (ctx) {
         state.jwCtx = ctx;
         state.jwCtx.variant = variant;
@@ -406,28 +432,29 @@
           $('jwCapRow').style.display = '';
           $('jwCaptcha').src = ctx.captcha;
           setCap('has');
-          btn.textContent = '① 重新取图';
+          btn.textContent = '① 换一张验证码';
           $('jwCode').focus();
-          toast('验证码已出现，照图填进左侧输入框');
+          toast('验证码已出现，照图填进上面输入框，再点 ②');
         } else {
           $('jwCapRow').style.display = 'none';
-          btn.textContent = '① 重新检测';
-          toast('该校无需验证码，直接填学号密码后点 ② 登录');
+          btn.textContent = '① 重新连接';
+          toast('连接成功，填学号密码后点 ②');
         }
+        jwNotes(ctx);
       })
       .catch(function (e) {
-        btn.disabled = false; btn.textContent = '① 获取验证码';
+        btn.disabled = false; btn.textContent = '① 连接教务系统';
         setCap('err');
-        $('jwWarn').textContent = '取验证码失败：' + e.message +
+        $('jwWarn').textContent = '连接失败：' + e.message +
           '\n常见原因：不在校园网 / 需要 VPN、教务地址填写不对、或当前是浏览器预览（跨域被拦）。' +
-          '\n抓不到时请改用「图片识别」或「文件导入」。';
+          '\n抓不到时请改用「文件 / PDF 导入」或「图片识别」。';
         $('jwWarn').classList.add('show');
         log($('jwLog'), '✘ ' + e.message);
       });
   }
 
   function jwRun() {
-    if (!state.jwCtx) { toast('请先点「① 获取验证码」，拿到图后再登录'); return; }
+    if (!state.jwCtx) { toast('请先点「① 连接教务系统」'); return; }
     var user = $('jwUser').value.trim();
     var pass = $('jwPass').value;
     var code = $('jwCode').value.trim();
@@ -456,20 +483,33 @@
       showConfirm(r.courses, '教务导入');
     }).catch(function (e) {
       btn.disabled = false; btn.textContent = '② 登录并抓取';
-      // 登录被拒提示验证码：说明该校其实要验证码，只是初次探测没命中
-      if (/验证码|yzm|chk|captcha/i.test(e.message)) {
-        $('jwWarn').textContent = '该校登录需要验证码（初次自动探测未命中，现已重新取图）。\n请看图填写后再点「② 登录并抓取」。';
+      var msg = e.message || String(e);
+
+      // 服务器明确要验证码（比如连错几次后）→ 此时才去取图，且只取一次
+      if (e.needCode) {
+        $('jwWarn').textContent = msg + '\n正在取一张验证码，请照图填写后再点「②」。';
         $('jwWarn').classList.add('show');
-        log($('jwLog'), '✘ ' + e.message + ' → 自动重新探测验证码');
-        jwReset();
-        jwPrepare();
+        log($('jwLog'), '✘ ' + msg);
+        jwPrepare(true);
         return;
       }
-      $('jwWarn').textContent = '抓取失败：' + e.message +
-        '\n如果提示验证码错误，点「① 获取验证码」换一张重填再试。';
+
+      // 密码错 / 被锁定：绝不自动重试，避免把仅有的尝试次数耗光
+      if (/密码不正确|锁|901|未登录/.test(msg)) {
+        $('jwWarn').textContent = '登录没有成功：' + msg +
+          '\n\n已经停下来没有自动重试——很多学校连错几次就会锁定账号。' +
+          '\n请核对学号密码。如果实在抓不通，直接用学校的课表截图走「图片识别」，' +
+          '或把导出的课表文件走「文件 / PDF 导入」，这两条路更稳。';
+        $('jwWarn').classList.add('show');
+        log($('jwLog'), '✘ ' + msg);
+        return;
+      }
+
+      $('jwWarn').textContent = '抓取失败：' + msg +
+        '\n可以点「① 连接教务系统」重来一次；反复失败请改用「文件 / PDF 导入」或「图片识别」。';
       $('jwWarn').classList.add('show');
       jwReset();
-      log($('jwLog'), '✘ ' + e.message);
+      log($('jwLog'), '✘ ' + msg);
     });
   }
 
@@ -693,9 +733,19 @@
     });
 
     // 教务：① 取验证码 → ② 登录抓取
-    $('jwGetCode').addEventListener('click', jwPrepare);
+    // 注意：这里必须包一层。直接把 jwPrepare 绑上去的话，点击事件对象会
+    // 当成 forceCode 参数传进去，导致「页面声明不要验证码」的学校也被强行取图。
+    $('jwGetCode').addEventListener('click', function () { jwPrepare(false); });
     $('jwLogin').addEventListener('click', jwRun);
-    $('jwRefreshCode').addEventListener('click', function () { jwReset(); jwPrepare(); });
+    $('jwRefreshCode').addEventListener('click', function () { jwReset(); jwPrepare(true); });
+    $('jwFillSchool').addEventListener('click', function () {
+      var list = JwImport.SCHOOL_PRESETS || [];
+      if (!list.length) return;
+      $('jwBase').value = list[0].base;
+      $('jwVariant').value = 'jwglxt';
+      jwReset();
+      toast('已填入 ' + list[0].name + '，点「① 连接教务系统」试试');
+    });
     $('jwVariant').addEventListener('change', jwReset);
     $('jwBase').addEventListener('change', jwReset);
     $('jwCaptcha').addEventListener('error', function () {

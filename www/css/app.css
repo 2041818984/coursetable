@@ -134,6 +134,12 @@ button{cursor:pointer}
   background:#fff7e6;border:1px solid #ffe0a3;color:#8a5a00;
 }
 #jwWebHint.show{display:block}
+#jwNote{
+  display:none;margin:10px 0;padding:9px 10px;border-radius:10px;line-height:1.6;
+  background:#eefaf0;border:1px solid #b7e6c4;color:#1c6b35;font-size:12px;
+}
+#jwNote.show{display:block}
+#jwNote div+div{margin-top:4px}
 
 /* ---------- 入口卡片 ---------- */
 .entry{display:flex;align-items:center;gap:12px;padding:14px}
