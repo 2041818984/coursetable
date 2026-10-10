@@ -23,8 +23,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 准备 Android SDK
-        uses: android-actions/setup-android@v3
+      - name: 接受 Android SDK 许可（用镜像自带 SDK）
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          ls ${ANDROID_HOME}/cmdline-tools/ || true
+          yes | ${ANDROID_HOME}/cmdline-tools/*/bin/sdkmanager --licenses || true
 
       - name: 安装依赖
         run: |
