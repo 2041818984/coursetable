@@ -74,20 +74,47 @@ scripts/build-android.sh 本地构建 APK
 
 ### 路线 A：GitHub Actions 云端构建（不需要本机装 Android SDK）
 
-1. 把整个目录推到一个 GitHub 仓库
+1. 在 GitHub 上新建一个空仓库，然后把它设为远端并推送：
+
+   ```bash
+   git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+   git branch -M main
+   git push -u origin main
+   ```
+
+   （本地仓库已初始化并做过首次提交，直接加远端推送即可）
+
 2. Settings → Secrets and variables → Actions 里不需要配任何密钥
 3. Actions 页面选中 `Build Android APK`，点 Run workflow
 4. 跑完后在 Artifacts 里下载 `coursetable-debug`，解压得到 `app-debug.apk`，传到手机安装
 
 也可以直接在仓库根执行 `git push` 触发（workflow 监听 main/master 分支）。
 
-### 路线 B：本机构建（需要 JDK 17+ 和 Android SDK）
+> `android/app/build/outputs/apk/debug/app-debug.apk` 是**构建成功后产物出现的位置**，源码里没有这个文件。
+> 看到这个路径不等于 APK 已经存在——本机没有 JDK / Android SDK，从未编译过。
 
-```bash
-bash scripts/build-android.sh
-```
+### 拿到 app-debug.apk 之后：装到手机上
 
-产物在 `android/app/build/outputs/apk/debug/app-debug.apk`。
+**能不能直接用？能。** 它是 Gradle 打的 debug 包，已用 debug keystore 自动签名，装上去就能打开，不需要你再做签名。
+
+安装步骤：
+
+1. 把 APK 传到手机（USB 数据线拷贝、QQ「我的电脑」、邮件附件都行）
+2. 手机上点开这个 APK
+3. 系统问「是否允许安装未知应用」→ 给对应的来源开一次授权（Android 8+ 是按来源授权的，不是全局开关）
+4. 若弹出「无法识别的应用 / Play 保护机制」提示 → 点「仍然安装」。debug 包没上架，这是正常提示
+
+**几个真实的坑**
+
+- **微信传 APK 会改后缀**（变成 `xxx.apk.1`），安卓认不出来装不了。传到手机后在文件管理器里把 `.1` 去掉，或者改用 QQ / USB 传。
+- **要求 Android 6.0 以上**（`minSdkVersion 23`），2016 年后的机器基本都满足。
+- **debug 包有时间限制吗？没有。** 但它是开发版，Android 15+ 可能在安装时多一步确认，不影响使用。
+
+**装好之后**
+
+- 课表、手动添加、文件导入、图片识别 —— 都能离线用（图片识别的本地 OCR 首次要联网下载十几 MB 的中文模型，之后离线可用）。
+- **教务系统直连需要手机在校园网里**，或者先连学校 VPN。校外 4G/5G 大概率连不上教务服务器，这是学校网络策略，不是 App 的问题。
+- 教务直连这条路我没法针对你们学校实测，抓不通就用图片或文件导入。
 
 想改应用名、包名、图标，编辑 `capacitor.config.json` 里的 `appName` / `appId`，图标放在 `android/app/src/main/res/` 下。
 
