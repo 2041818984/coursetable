@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+在没有 github.com:443 通道的网络里推送改动。
+
+本机只能访问 api.github.com，`git push`/`git fetch` 都会报
+「CONNECT tunnel failed, response 502」，于是改用 Git Data API：
+上传变化的 blob → 以远端已有的 tree 为 base 建新 tree → 建 commit → 更新 ref。
+
+只上传相对父提交有变化的文件，其余文件通过 base_tree 沿用远端已有 blob，
+所以不会重传 30MB 的 OCR 模型。
+
+因为父提交可能只存在于远端（本地 fetch 不了），变化文件是用
+「本地 git ls-tree 的 blob sha」对比「远端 API 的 tree sha」算出来的，
+不依赖本地有父提交这个对象。
+
+凭据：先读环境变量 GH_TOKEN，没有就用 `git credential fill` 向系统凭据管理器要。
+
+用法：
+    python scripts/push-via-api.py <远端当前 main 的 sha> [本地提交，默认 HEAD]
+例：
+    python scripts/push-via-api.py 5f0778f6e16a47f818039b8c730e5db1671200b1
+"""
+import base64
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+REPO = '2041818984/coursetable'
+BRANCH = 'main'
+API = 'https://api.github.com'
+
+
+def sh(args, **kw):
+    return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def get_token():
+    tok = os.environ.get('GH_TOKEN')
+    if tok:
+        return tok.strip()
+    out = sh(['git', 'credential', 'fill'],
+             input='protocol=https\nhost=github.com\n\n')
+    if out.returncode != 0:
+        print('git credential fill 失败：' + out.stderr.strip())
+        sys.exit(1)
+    for line in out.stdout.splitlines():
+        if line.startswith('password='):
+            return line[len('password='):].strip()
+    print('凭据里没有 password 字段')
+    sys.exit(1)
+
+
+TOKEN = get_token()
+
+
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method)
+    req.add_header('Authorization', 'Bearer ' + TOKEN)
+    req.add_header('Accept', 'application/vnd.github+json')
+    req.add_header('X-GitHub-Api-Version', '2022-11-28')
+    if data:
+        req.add_header('Content-Type', 'application/json')
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        print('  ✘ HTTP %s  %s\n    %s' % (e.code, path, e.read().decode()[:800]))
+        sys.exit(1)
+
+
+def local_blobs(rev):
+    """本地提交里 path -> (mode, blob sha)"""
+    out = sh(['git', 'ls-tree', '-r', rev]).stdout
+    d = {}
+    for line in out.splitlines():
+        meta, path = line.split('\t', 1)
+        mode, _typ, sha = meta.split()
+        d[path] = (mode, sha)
+    return d
+
+
+def remote_blobs(sha):
+    """远端提交里 path -> (mode, blob sha)"""
+    r = api('GET', '/repos/%s/git/trees/%s?recursive=1' % (REPO, sha))
+    d = {}
+    for e in r.get('tree', []):
+        if e.get('type') == 'blob':
+            d[e['path']] = (e.get('mode'), e['sha'])
+    return d
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    base = sys.argv[1].strip()                    # 远端当前 main 的 sha
+    local = sh(['git', 'rev-parse', sys.argv[2] if len(sys.argv) > 2 else 'HEAD']).stdout.strip()
+
+    print('父提交  : ' + base)
+    print('内容来源: ' + local)
+
+    # --- 0) 确认远端 main 仍指向父提交，避免覆盖别人的提交 ---
+    ref = api('GET', '/repos/%s/git/ref/heads/%s' % (REPO, BRANCH))
+    now = ref.get('object', {}).get('sha')
+    if now != base:
+        print('  ✘ 远端 %s 已经不在 %s（现在是 %s），终止。' %
+              (BRANCH, base[:7], (now or '?')[:7]))
+        sys.exit(1)
+    print('远端 %s 仍指向 %s，可以安全快进。' % (BRANCH, base[:7]))
+
+    # --- 1) 算出差异（不依赖本地拥有父提交对象）---
+    lset, rset = local_blobs(local), remote_blobs(base)
+    changed = []
+    for path, (mode, sha) in lset.items():
+        if path not in rset or rset[path][1] != sha:
+            changed.append((path, mode, sha))
+    deleted = [p for p in rset if p not in lset]
+    changed.sort()
+
+    if not changed and not deleted:
+        print('\n没有差异，什么都不用做。')
+        return
+    print('\n需要上传 %d 个，删除 %d 个：' % (len(changed), len(deleted)))
+    for p, mode, _sha in changed:
+        print('  M %s' % p)
+    for p in deleted:
+        print('  D %s' % p)
+
+    # --- 2) 上传新 blob ---
+    print('\n上传 blob：')
+    entries = []
+    for path, mode, _sha in changed:
+        with open(path, 'rb') as f:
+            content = f.read()
+        r = api('POST', '/repos/%s/git/blobs' % REPO, {
+            'content': base64.b64encode(content).decode(),
+            'encoding': 'base64',
+        })
+        entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': r['sha']})
+        print('  ✔ %-30s %7d 字节 → %s' % (path, len(content), r['sha'][:8]))
+    for path in deleted:
+        entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
+
+    # --- 3) 以远端的 tree 为底建新 tree ---
+    base_tree = api('GET', '/repos/%s/git/commits/%s' % (REPO, base))['tree']['sha']
+    tree = api('POST', '/repos/%s/git/trees' % REPO,
+               {'base_tree': base_tree, 'tree': entries})
+    print('\n新 tree: ' + tree['sha'])
+
+    # --- 4) 建提交 ---
+    msg = sh(['git', 'log', '-1', '--format=%B', local]).stdout.strip()
+    commit = api('POST', '/repos/%s/git/commits' % REPO, {
+        'message': msg, 'tree': tree['sha'], 'parents': [base],
+    })
+    print('新提交: %s' % commit['sha'])
+
+    # --- 5) 更新 ref（非强制，不是快进就会失败，不会覆盖别人的提交）---
+    upd = api('PATCH', '/repos/%s/git/refs/heads/%s' % (REPO, BRANCH),
+              {'sha': commit['sha'], 'force': False})
+    print('已更新 %s → %s' % (BRANCH, upd['object']['sha'][:8]))
+
+    # --- 6) 复核 ---
+    got = api('GET', '/repos/%s/commits/%s' % (REPO, commit['sha']))
+    print('\n复核：%s' % got['sha'][:8])
+    print('  提交信息首行: ' + got['commit']['message'].splitlines()[0])
+    print('  文件树 sha  : ' + got['commit']['tree']['sha'])
+    print('\n✔ 推送成功。下次再推，把这个 sha 当父提交传进来：')
+    print('  python scripts/push-via-api.py ' + commit['sha'])
+
+
+if __name__ == '__main__':
+    main()
