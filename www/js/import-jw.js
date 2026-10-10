@@ -16,9 +16,12 @@
       code: [
         '/jwglxt/verifycode.servlet',
         '/jwglxt/xtgl/login_getVerifyCode.html',
+        '/jwglxt/xtgl/login_captcha.html',
         '/jwglxt/CheckCode.aspx',
         '/jwglxt/img/captcha.jpg',
-        '/jwglxt/verifyCode.servlet'
+        '/jwglxt/verifyCode.servlet',
+        '/jwglxt/captcha',
+        '/jwglxt/code'
       ],
       kb: [
         '/jwglxt/xskbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2535',

@@ -6,7 +6,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
 
-  var state = { week: 1, engine: 'ocr', pending: [], imgDataUrl: null, jwCtx: null, editingId: null };
+  var state = { week: 1, engine: 'llm', pending: [], imgDataUrl: null, jwCtx: null, editingId: null };
 
   /* ---------------- 工具 ---------------- */
   var toastTimer;
@@ -330,6 +330,15 @@
       showConfirm(r.courses, '教务导入');
     }).catch(function (e) {
       btn.disabled = false; btn.textContent = '② 登录并抓取';
+      // 登录被拒提示验证码：说明该校其实要验证码，只是初次探测没命中
+      if (/验证码|yzm|chk|captcha/i.test(e.message)) {
+        $('jwWarn').textContent = '该校登录需要验证码（初次自动探测未命中，现已重新取图）。\n请看图填写后再点「② 登录并抓取」。';
+        $('jwWarn').classList.add('show');
+        log($('jwLog'), '✘ ' + e.message + ' → 自动重新探测验证码');
+        jwReset();
+        jwPrepare();
+        return;
+      }
       $('jwWarn').textContent = '抓取失败：' + e.message +
         '\n如果提示验证码错误，点「① 获取验证码」换一张重填再试。';
       $('jwWarn').classList.add('show');

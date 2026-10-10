@@ -208,8 +208,8 @@
       <input type="file" id="fileImg" accept="image/*" hidden>
       <input type="file" id="fileImgCam" accept="image/*" capture="environment" hidden>
       <div class="seg" id="ocrEngine">
-        <button class="seg-i active" data-engine="ocr">本地 OCR（离线）</button>
-        <button class="seg-i" data-engine="llm">AI 识别（更准）</button>
+        <button class="seg-i" data-engine="ocr">本地 OCR（离线）</button>
+        <button class="seg-i active" data-engine="llm">AI 识别（更准）</button>
       </div>
       <div class="preview" id="imgPreview"><span>未选择图片</span></div>
       <button class="btn primary block" id="btnRunOcr">开始识别</button>
@@ -230,7 +230,7 @@
     <div class="sheet-b">
       <button class="btn block" id="btnPickFile">选择 xls / xlsx / csv / html</button>
       <input type="file" id="fileDoc" accept=".xls,.xlsx,.csv,.html,.htm,text/html,text/csv" hidden>
-      <p class="hint">推荐做法：在手机浏览器登录教务系统 → 课表页面 → 复制整页 HTML 粘贴到下面。</p>
+      <p class="hint">推荐做法：在手机浏览器登录教务系统 → 进课表页面 → 长按全选复制 → 粘贴到下面框里。也可以用「图片识别」直接截图。</p>
       <textarea id="pasteHtml" rows="5" placeholder="在此粘贴课表页面源码或制表符表格…"></textarea>
       <button class="btn primary block" id="btnParseFile">解析</button>
       <pre class="log" id="fileLog"></pre>
