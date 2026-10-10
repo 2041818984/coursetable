@@ -155,9 +155,52 @@
     });
   }
 
+  /* ---------- 读登录页：判断验证码类型、找出真实图片地址与隐藏字段 ----------
+     新版正方（V9 / 正方云）把字符验证码换成了滑块拼图，登录页里会出现
+     zfcaptchaLogin / zfdun 这类标记。滑块必须人工拖动，本 App 不做自动识别，
+     所以检测到就明确告诉用户换导入方式，而不是一路试到超时。 */
+  function inspectLoginPage(base, variant, log) {
+    var rel = (PATHS[variant] || PATHS.jwglxt).loginPage;
+    var url = base + rel;
+    log('读取登录页：' + url);
+    return req(url, { method: 'GET', headers: { 'Accept': 'text/html' } })
+      .then(function (res) {
+        var html = String(res.data == null ? '' : res.data);
+        var info = { slider: false, codeUrl: '', csrf: '', len: html.length };
+        if (!html) return info;
+
+        if (/zfcaptchaLogin|zfdun|slider[-_]?bar|slideVerify|captcha_config/i.test(html)) {
+          info.slider = true;
+        }
+        var m = html.match(/['"]([^'"]*(?:verifycode|verifyCode|checkcode|CheckCode|validatecode|ValidateCode|imgcode)[^'"]*)['"]/);
+        if (m) info.codeUrl = m[1];
+        var c = html.match(/name=['"]csrftoken['"][^>]*value=['"]([^'"]*)['"]/i) ||
+          html.match(/csrftoken['"]?\s*[:=]\s*['"]([^'"]+)['"]/i);
+        if (c) info.csrf = c[1];
+
+        log('登录页长度 ' + html.length);
+        if (info.slider) log('⚠ 检测到滑块拼图验证码（新版正方常见）');
+        if (info.codeUrl) log('✔ 页面里的验证码图片：' + info.codeUrl);
+        if (info.csrf) log('✔ 找到 csrftoken');
+        if (!info.slider && !info.codeUrl) log('· 页面里没找到验证码痕迹，可能不需要验证码');
+        return info;
+      })
+      .catch(function (e) {
+        log('· 登录页读取失败：' + e.message + '（继续按默认路径探测）');
+        return null;
+      });
+  }
+
   /* ---------- 探测验证码接口 ---------- */
-  function detectCode(base, variant, log) {
-    var list = (PATHS[variant] || PATHS.jwglxt).code;
+  function detectCode(base, variant, log, preferred) {
+    var list = (PATHS[variant] || PATHS.jwglxt).code.slice();
+    // 登录页里直接写明的地址最可信，排到最前面先试
+    if (preferred) {
+      var p = String(preferred);
+      if (/^https?:\/\//i.test(p)) p = (p.indexOf(base) === 0) ? p.slice(base.length) : '';
+      if (p && p.charAt(0) !== '/') p = '/' + p;
+      if (p) list.unshift(p);
+    }
     var i = 0;
     function next() {
       if (i >= list.length) return Promise.reject(new Error('没找到验证码接口，请在「高级」里手动填写'));
