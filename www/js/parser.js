@@ -13,11 +13,24 @@
 
   /* 单元格专用规范化：保留换行（换行是「课程名 / 教师 / 地点 / 周次」的分隔依据），
      只把空格、制表符这类横向空白压成单个空格 */
-  function normCell(s) {
+  /* OCR 出来的中文往往带空格：「高 等 数 学 A」「星 期 一」。
+     原因是 tesseract 把每个汉字当成独立的 word，拼回文字时会插空格。
+     这里把「与汉字相邻」的空格收掉；纯西文之间的空格（Data Structure）照留。 */
+  var CJK_CH = '\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\u3000-\\u303f\\uff01-\\uff60';
+  var RE_CJK_THEN_SP = new RegExp('([' + CJK_CH + '])[ \\t]+', 'g');
+  var RE_SP_THEN_CJK = new RegExp('[ \\t]+(?=[' + CJK_CH + '])', 'g');
+
+  function tighten(s) {
     return String(s == null ? '' : s)
+      .replace(RE_CJK_THEN_SP, '$1')
+      .replace(RE_SP_THEN_CJK, '');
+  }
+
+  function normCell(s) {
+    return tighten(String(s == null ? '' : s)
       .replace(/\r\n?/g, '\n')
       .replace(/[ \t\u00a0　]+/g, ' ')
-      .replace(/ ?\n ?/g, '\n')
+      .replace(/ ?\n ?/g, '\n'))
       .replace(/\n{2,}/g, '\n')
       .trim();
   }
@@ -413,6 +426,84 @@
     return n >= 1;
   }
 
+  /* OCR 的「按字切词」要先粘回来。
+     tesseract 把每个汉字当成一个独立的 word 输出：「高等数学A」是 6 个词块、
+     「星期一」是 3 个。直接丢给表格重建会被拆得七零八落（课程名变成 "高 等 数 学 A"，
+     甚至每个字各占一行）。这里按几何位置把同一行里紧挨着的碎片粘回整段文字，
+     恢复成「一个词块 = 一段文字」的形态——表格重建那套逻辑本来就是按这个前提写的。
+     只粘「有一侧是汉字」或「几乎贴合」的碎片，英文单词之间的空格照留。 */
+  var CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+
+  function glueCjkWords(words, minConf) {
+    minConf = minConf == null ? 40 : minConf;
+    var ws = (words || []).filter(function (w) {
+      return w && w.bbox && trim(w.text) && (!w.confidence || w.confidence >= minConf);
+    });
+    if (ws.length < 2) return ws;
+
+    var heights = ws.map(function (w) { return Math.max(4, w.bbox.y1 - w.bbox.y0); })
+      .sort(function (a, b) { return a - b; });
+    var medH = heights[Math.floor(heights.length / 2)] || 20;
+
+    // 按中心点 y 分行
+    var list = ws.slice().sort(function (a, b) {
+      var d = (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1);
+      return Math.abs(d) > 2 ? d : a.bbox.x0 - b.bbox.x0;
+    });
+
+    var lines = [], cur = null;
+    list.forEach(function (w) {
+      var cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      var h = Math.max(4, w.bbox.y1 - w.bbox.y0);
+      var tol = Math.max(medH, h) * 0.55;
+      if (!cur || Math.abs(cy - cur.cy) > tol) {
+        cur = { cy: cy, items: [w] };
+        lines.push(cur);
+      } else {
+        cur.items.push(w);
+        cur.cy = (cur.cy * (cur.items.length - 1) + cy) / cur.items.length;
+      }
+    });
+
+    var out = [];
+    lines.forEach(function (ln) {
+      ln.items.sort(function (a, b) { return a.bbox.x0 - b.bbox.x0; });
+      var runs = [], r = null;
+      ln.items.forEach(function (w) {
+        var t = trim(w.text);
+        if (!t) return;
+        var h = Math.max(4, w.bbox.y1 - w.bbox.y0);
+        if (r) {
+          var gap = w.bbox.x0 - r.bbox.x1;
+          // 粘的条件：有一侧是汉字，或者两块几乎贴在一起；同时间距不能大到像隔壁格子。
+          // 注意阈值要用「中位字高」而不是当前块自己的高度——「一」只有一个横杠，
+          // bbox 高度可能就 3px，拿它当基准会把「星期|一」拆开。
+          var refH = Math.max(medH, h);
+          var glue = (CJK_RE.test(t) || CJK_RE.test(r.text) || gap <= 1) && gap <= refH * 1.2;
+          if (glue) {
+            r.text += t;
+            r.bbox.x0 = Math.min(r.bbox.x0, w.bbox.x0);
+            r.bbox.y0 = Math.min(r.bbox.y0, w.bbox.y0);
+            r.bbox.x1 = Math.max(r.bbox.x1, w.bbox.x1);
+            r.bbox.y1 = Math.max(r.bbox.y1, w.bbox.y1);
+            if (w.confidence != null) {
+              r.confidence = (r.confidence == null) ? w.confidence : Math.min(r.confidence, w.confidence);
+            }
+            return;
+          }
+        }
+        r = {
+          text: t,
+          bbox: { x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 },
+          confidence: w.confidence
+        };
+        runs.push(r);
+      });
+      runs.forEach(function (x) { out.push(x); });
+    });
+    return out;
+  }
+
   function wordsToTable(words, minConf, maxDepth) {
     minConf = minConf == null ? 40 : minConf;
     var ws = (words || []).filter(function (w) {
@@ -584,6 +675,8 @@
     wordsToGrid: wordsToGrid,
     mergeBlockRows: mergeBlockRows,
     normCell: normCell,
+    tighten: tighten,
+    glueCjkWords: glueCjkWords,
     extractWeeks: extractWeeks,
     extractPeriods: extractPeriods,
     extractTimePeriods: extractTimePeriods,

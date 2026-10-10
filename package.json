@@ -7,7 +7,10 @@
     "sync": "cap sync",
     "open:android": "cap open android",
     "build:android": "cap sync android && cd android && ./gradlew assembleDebug",
-    "test": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js"
+    "test": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js && node scripts/smoke-ocr.js",
+    "test:core": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js",
+    "test:ocr": "node scripts/smoke-ocr.js",
+    "fixtures": "python scripts/make-test-pdf.py && python scripts/make-test-ocr-image.py"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.2",

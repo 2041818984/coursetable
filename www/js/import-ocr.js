@@ -135,14 +135,98 @@
     return out;
   }
 
+  /* ---------- 抹掉表格线 ----------
+     这一步对识别率影响极大：课表的竖线会把表头「星期一」切成一个个孤立的小块，
+     tesseract 在孤立小块上很容易把 3 个汉字认成 me/as/men 这种拉丁乱码，
+     结果就是表头认不出来 → 所有课都堆到周一。把线涂白后表头能完整成行，识别率大幅提升。
+     抹线只涂 3px 宽的细条，文字笔画不会被碰到（能被判定成"线"的行/列，暗像素占比要 >72%）。 */
+  function stripGridLines(img, grid) {
+    try {
+      var W = img.naturalWidth || img.width;
+      var H = img.naturalHeight || img.height;
+      if (!W || !H || !grid) return null;
+
+      // 目标边长 1800：小图放大、大图缩小，都往「适合 OCR」的尺寸靠
+      var scale = Math.min(2, Math.max(0.5, 1800 / Math.max(W, H)));
+      var w = Math.max(1, Math.round(W * scale));
+      var h = Math.max(1, Math.round(H * scale));
+
+      var cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      var ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+
+      var t = Math.max(1, Math.round(3 * scale));
+      var off = Math.floor(t / 2);
+      ctx.fillStyle = '#fff';
+      (grid.ys || []).forEach(function (y) {
+        var yy = Math.round(y * scale);
+        if (yy >= -t && yy <= h + t) ctx.fillRect(0, yy - off, w, t);
+      });
+      (grid.xs || []).forEach(function (x) {
+        var xx = Math.round(x * scale);
+        if (xx >= -t && xx <= w + t) ctx.fillRect(xx - off, 0, t, h);
+      });
+
+      // 用无损 PNG：JPEG 的压缩噪点会拉低 OCR 准确率
+      return {
+        dataUrl: cv.toDataURL('image/png'),
+        // 网格要换算到「抹线后画布」的坐标系，否则词块会落错格子
+        grid: {
+          xs: (grid.xs || []).map(function (x) { return x * scale; }),
+          ys: (grid.ys || []).map(function (y) { return y * scale; })
+        }
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* ---------- 词块 → 课程 ----------
+     表格重建有多个方案，各自解一遍，取「真能解出课」的那个：
+       网格方案：有表格线时最准，词块按中心点落格
+       锚点方案：认节次列（第N节）当行分隔
+       普通方案：只靠 y 坐标聚类，兜底
+     grid 为空（没检测到表格线）时自动跳过网格方案。 */
+  function buildCourses(words, grid, totalWeeks) {
+    // 先把 tesseract 的「按字切词」粘回整段文字，否则中文课表会被拆散
+    var runs = words;
+    try { runs = global.Parser.glueCjkWords(words, 40) || words; } catch (e) { runs = words; }
+
+    var cands = [];
+    if (grid) { try { cands.push(global.Parser.wordsToGrid(runs, grid, 40, 3)); } catch (e) { } }
+    try { cands.push(global.Parser.wordsToTableByAnchor(runs, 40)); } catch (e) { }
+    try { cands.push(global.Parser.wordsToTable(runs, 40, 3)); } catch (e) { }
+
+    var matrix = [], courses = [];
+    for (var k = 0; k < cands.length; k++) {
+      var m = cands[k];
+      if (!m || !m.length) continue;
+      var cs = [];
+      try { cs = global.Parser.parseTable(m, totalWeeks) || []; } catch (e) { cs = []; }
+      if (cs.length) { matrix = m; courses = cs; break; }
+      if (!matrix.length) matrix = m;
+    }
+    return { matrix: matrix, courses: courses, runs: runs };
+  }
+
   /* ---------- 本地 OCR ---------- */
   function runOcr(dataUrl, onProgress, totalWeeks) {
-    var grid = null;
+    var grid = null;      // 词块 → 格子用的网格
+    var input = dataUrl;  // 真正喂给 tesseract 的图
     return loadImage(dataUrl).then(function (img) {
       if (onProgress) onProgress('检测表格线…');
       grid = detectGrid(img);
-      if (onProgress && grid) {
-        onProgress('已识别表格线：' + (grid.ys.length - 1) + ' 行 × ' + (grid.xs.length - 1) + ' 列');
+      if (grid) {
+        if (onProgress) {
+          onProgress('已识别表格线：' + (grid.ys.length - 1) + ' 行 × ' + (grid.xs.length - 1) + ' 列，抹线后再识别…');
+        }
+        var cleaned = stripGridLines(img, grid);
+        if (cleaned) { input = cleaned.dataUrl; grid = cleaned.grid; }
+      } else if (onProgress) {
+        onProgress('没找到表格线，按坐标直接聚类…');
       }
       return loadTesseract(function (m) { if (onProgress) onProgress(m); });
     })
@@ -157,7 +241,7 @@
           }
           var cfg = chain[i];
           if (onProgress) onProgress('加载「' + cfg.tag + '」（中文模型约 19MB，首次稍慢）…');
-          return T.recognize(dataUrl, LANG, {
+          return T.recognize(input, LANG, {
             workerPath: cfg.worker,
             corePath: cfg.core,
             langPath: cfg.lang,
@@ -183,9 +267,11 @@
         var words = d.words || [];
         var lines = (d.lines || []).map(function (l) { return (l.text || '').trim(); }).filter(Boolean);
 
-        var matrix = (grid && global.Parser.wordsToGrid(words, grid, 40, 3)) ||
-          global.Parser.wordsToTable(words, 40, 3);
-        var courses = global.Parser.parseTable(matrix, totalWeeks);
+        // 表格重建有多个方案，各自解一遍，取「真能解出课」的那个。
+        // 网格方案最准（有表格线时）；锚点方案认节次列；普通方案只靠坐标，兜底用。
+        var built = buildCourses(words, grid, totalWeeks);
+        var matrix = built.matrix;
+        var courses = built.courses;
 
         // 表格重建失败时，退化为逐行解析
         if (!courses.length) {
@@ -302,6 +388,9 @@
     runOcr: runOcr,
     runLlm: runLlm,
     compress: compress,
-    loadTesseract: loadTesseract
+    loadTesseract: loadTesseract,
+    detectGrid: detectGrid,
+    stripGridLines: stripGridLines,
+    buildCourses: buildCourses
   };
 })(window);
