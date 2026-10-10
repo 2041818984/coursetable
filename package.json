@@ -1,0 +1,19 @@
+{
+  "name": "coursetable",
+  "version": "1.0.0",
+  "private": true,
+  "description": "手机课程表 App：正方教务直连导入 + 图片识别导入",
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android",
+    "build:android": "cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.9"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9"
+  }
+}

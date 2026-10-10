@@ -1,0 +1,22 @@
+{
+  "appId": "cn.edu.coursetable",
+  "appName": "课表",
+  "webDir": "www",
+  "loggingEnabled": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorCookies": {
+      "enabled": true
+    }
+  }
+}
