@@ -58,11 +58,20 @@
   <header class="topbar simple"><h1>导入课表</h1></header>
   <div class="scroll">
 
+    <div class="card entry" data-open="file">
+      <div class="entry-ico file">📄</div>
+      <div class="entry-txt">
+        <h3>文件 / PDF 导入<em class="badge">最稳</em></h3>
+        <p>教务导出的课表 PDF、xls、csv，或粘贴页面源码</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
     <div class="card entry" data-open="jw">
       <div class="entry-ico jw">🏫</div>
       <div class="entry-txt">
         <h3>正方教务系统导入</h3>
-        <p>输入学号密码，自动登录抓取课表</p>
+        <p>输学号密码自动抓取；若该校用滑块验证码则需改用其他方式</p>
       </div>
       <span class="chev">›</span>
     </div>
@@ -72,15 +81,6 @@
       <div class="entry-txt">
         <h3>图片识别导入</h3>
         <p>截图 / 拍照课表，OCR 或 AI 识别</p>
-      </div>
-      <span class="chev">›</span>
-    </div>
-
-    <div class="card entry" data-open="file">
-      <div class="entry-ico file">📄</div>
-      <div class="entry-txt">
-        <h3>文件 / 网页导入</h3>
-        <p>教务导出的 xls、csv 或粘贴页面源码</p>
       </div>
       <span class="chev">›</span>
     </div>
@@ -96,6 +96,12 @@
 
     <div class="tip-box">
       <b>提示</b>导入的课程会先进入「待确认列表」，核对无误后再写入课表，不会覆盖已有数据。
+    </div>
+
+    <div class="tip-box">
+      <b>哪条路走得通</b>教务系统导出的课表文件（PDF / Excel）最好用，成功率最高。
+      能自己登录教务并能截图的话，图片识别也可以。需要输入学号密码自动抓取的那条路，取决于学校系统：
+      新版正方用的是滑块验证码，必须人工拖动，App 不代做，这条路会走不通。
     </div>
   </div>
 </section>

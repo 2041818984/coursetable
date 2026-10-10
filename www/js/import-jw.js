@@ -259,17 +259,32 @@
   function prepare(baseRaw, variant, log) {
     var base = normalizeBase(baseRaw);
     if (!base) return Promise.reject(new Error('请先填写教务地址'));
+    var page = null;
     return ping(base, log)
-      .then(function () {
+      .then(function () { return inspectLoginPage(base, variant, log); })
+      .then(function (info) {
+        page = info;
+        if (info && info.slider) {
+          throw new Error('这套教务用的是「滑块拼图」验证码（新版正方 / 正方云常见）。' +
+            '滑块必须人工拖动，App 不做自动识别，所以自动登录这条路走不通。' +
+            '请改用「文件 / 网页导入」——教务导出的课表 PDF 可以直接读；' +
+            '或者用「图片识别」把课表截图导进来。');
+        }
         // 取不到验证码不代表失败：不少学校登录不需要验证码
-        return detectCode(base, variant, log).catch(function (e) {
+        return detectCode(base, variant, log, info && info.codeUrl).catch(function (e) {
           log('· 未取到验证码（' + e.message + '），按「无需验证码」继续');
           return null;
         });
       })
       .then(function (c) {
         return getPublicKey(base, variant, log).then(function (k) {
-          return { base: base, captcha: c ? c.dataUrl : '', needCode: !!c, pubkey: k };
+          return {
+            base: base,
+            captcha: c ? c.dataUrl : '',
+            needCode: !!c,
+            pubkey: k,
+            csrf: (page && page.csrf) || ''
+          };
         });
       });
   }
@@ -289,6 +304,8 @@
     }
     var loginUrl = base + (PATHS[variant] || PATHS.jwglxt).loginPage;
     var body = 'yhm=' + encodeURIComponent(user) + '&mm=' + encodeURIComponent(pwd) + '&yzm=' + encodeURIComponent(code || '');
+    // 新版正方登录页带 csrftoken 隐藏字段，登录时必须原样带回
+    if (ctx.csrf) body += '&csrftoken=' + encodeURIComponent(ctx.csrf);
     log('登录 → ' + loginUrl);
     return req(loginUrl, {
       method: 'POST',
@@ -404,6 +421,8 @@
   global.JwImport = {
     PATHS: PATHS,
     normalizeBase: normalizeBase,
+    inspectLoginPage: inspectLoginPage,
+    detectCode: detectCode,
     prepare: prepare,
     run: run,
     htmlToMatrix: htmlToMatrix,

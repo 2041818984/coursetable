@@ -14,7 +14,7 @@ const w = dom.window;
 });
 
 (async () => {
-  const data = new Uint8Array(fs.readFileSync(path.join(root, '.tmp-test.pdf')));
+  const data = new Uint8Array(fs.readFileSync(path.join(__dirname, 'test-timetable.pdf')));
   const doc = await pdfjsLib.getDocument({ data, useSystemFonts: false }).promise;
   const page = await doc.getPage(1);
   const vp = page.getViewport({ scale: 1 });

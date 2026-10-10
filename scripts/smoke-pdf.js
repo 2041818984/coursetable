@@ -50,9 +50,9 @@ t('No.1 与它的课程合成一行',
   m1[1]);
 
 /* ---------- 2 & 3. 真实 PDF ---------- */
-const pdfPath = path.join(root, '.tmp-test.pdf');
+const pdfPath = path.join(__dirname, 'test-timetable.pdf');
 if (!fs.existsSync(pdfPath)) {
-  console.log('\n! 缺少 .tmp-test.pdf，跳过集成测试（可运行 scripts/make-test-pdf.py 生成）');
+  console.log('\n! 缺少 scripts/test-timetable.pdf，跳过集成测试（可运行 scripts/make-test-pdf.py 生成）');
   console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);
 }

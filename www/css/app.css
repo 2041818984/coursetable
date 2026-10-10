@@ -157,6 +157,13 @@ button{cursor:pointer}
 .btn[disabled]{opacity:.5}
 .btns{display:flex;flex-direction:column;gap:8px}
 
+/* 入口卡片上的小徽标 */
+.entry-txt h3 .badge{
+  display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;
+  font-size:11px;font-style:normal;font-weight:500;letter-spacing:0;
+  background:#e8edff;color:var(--brand);vertical-align:2px;
+}
+
 /* ---------- 手动添加：点选式选择器 ---------- */
 .fld{margin:14px 0}
 .fld-lb{display:block;font-size:13px;color:var(--tx2);margin-bottom:8px}

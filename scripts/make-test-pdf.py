@@ -2,6 +2,7 @@
 """生成一个用于测试 PDF 导入链路的课表 PDF（纯 ASCII，用内置 Helvetica 字体）。
 中文需嵌入字体，测试里不重要——解析链路一致，中文场景另外由 OCR 路径覆盖。
 """
+import os
 import sys
 
 W, H = 612, 792
@@ -66,7 +67,8 @@ for off in offsets:
 out += b"trailer\n<< /Size " + str(len(OBJS) + 1).encode() + b" /Root 1 0 R >>\n"
 out += b"startxref\n" + str(xref_at).encode() + b"\n%%EOF\n"
 
-path = sys.argv[1] if len(sys.argv) > 1 else 'test-timetable.pdf'
+path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'test-timetable.pdf')
 with open(path, 'wb') as f:
     f.write(bytes(out))
 print("已生成 %s，%d 字节" % (path, len(out)))

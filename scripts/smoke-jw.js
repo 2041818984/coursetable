@@ -52,11 +52,49 @@ setTimeout(() => {
   t('无未捕获运行时错误', errors.length === 0, errors);
 
   console.log('\n[5] 「无需验证码」分支：needCode=false 应隐藏验证码行');
-  const Jw = w.JwImport;
-  t('JwImport.prepare 存在', typeof Jw.prepare === 'function');
-  // 直接调用内部逻辑不可行，改为校验返回值约定字段
-  t('prepare 返回对象含 needCode 约定', /needCode/.test(fs.readFileSync(path.join(root, 'www/js/import-jw.js'), 'utf8')));
+  const J = w.JwImport;
+  t('JwImport.prepare 存在', typeof J.prepare === 'function');
+  t('JwImport.inspectLoginPage 存在', typeof J.inspectLoginPage === 'function');
 
-  console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
-  process.exit(fail ? 1 : 0);
+  /* 用假登录页把 req 的输出接过来，验证验证码类型的判断 */
+  const SLIDER_HTML = '<html><script>window.zfdun_captcha_config={requestUrl:"/zfcaptchaLogin",rtk:"x"};</script>' +
+    '<input type="hidden" name="csrftoken" value="abc123"></html>';
+  const OLD_HTML = '<html><img src="/jsxsd/verifycode.servlet?t=1">' +
+    '<input type="hidden" name="csrftoken" value="tok9"></html>';
+  const PLAIN_HTML = '<html><body>please login</body></html>';
+
+  let feed = SLIDER_HTML;
+  w.Bridge.http = function (opt) {
+    return Promise.resolve({ status: 200, headers: {}, data: feed, url: opt.url });
+  };
+
+  (async () => {
+    let info = await J.inspectLoginPage('https://jw.example.edu.cn', 'jwglxt', () => {});
+    t('识别出滑块拼图验证码', info && info.slider === true, info && info.slider);
+    t('提取到 csrftoken', info && info.csrf === 'abc123', info && info.csrf);
+
+    feed = OLD_HTML;
+    info = await J.inspectLoginPage('https://jw.example.edu.cn', 'jsxsd', () => {});
+    t('传统字符验证码不会误判为滑块', info && info.slider === false, info && info.slider);
+    t('提取到验证码图片地址', info && /verifycode/.test(info.codeUrl), info && info.codeUrl);
+
+    feed = PLAIN_HTML;
+    info = await J.inspectLoginPage('https://jw.example.edu.cn', 'jwglxt', () => {});
+    t('无验证码页面：两项都为空', info && !info.slider && !info.codeUrl, info);
+
+    console.log('\n[6] 滑块系统下 prepare 应直接给可操作提示，而不是一路试到超时');
+    feed = SLIDER_HTML;
+    let err = null;
+    try { await J.prepare('https://jw.example.edu.cn', 'jwglxt', () => {}); }
+    catch (e) { err = e; }
+    t('prepare 直接失败', !!err, err && err.message);
+    t('错误信息点明是滑块验证码', !!err && /滑块/.test(err.message), err && err.message);
+    t('错误信息引导改用 PDF 或图片导入', !!err && /PDF|图片/.test(err.message), err && err.message);
+
+    console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
+    process.exit(fail ? 1 : 0);
+  })().catch(e => {
+    console.log('  ✘ 异步测试异常：' + (e && e.stack || e));
+    process.exit(1);
+  });
 }, 600);
