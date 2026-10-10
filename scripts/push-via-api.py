@@ -14,6 +14,10 @@
 「本地 git ls-tree 的 blob sha」对比「远端 API 的 tree sha」算出来的，
 不依赖本地有父提交这个对象。
 
+上传的内容一律从 git 对象库取（`git cat-file blob`），不读工作区文件：
+Windows 上 core.autocrlf=true 会把工作区变成 CRLF，直接读磁盘会
+把 CRLF 写进仓库、并让 blob sha 对不上，导致每次都重复上传同一个文件。
+
 凭据：先读环境变量 GH_TOKEN，没有就用 `git credential fill` 向系统凭据管理器要。
 
 用法：
@@ -36,6 +40,11 @@ API = 'https://api.github.com'
 
 def sh(args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def sh_bytes(args):
+    """取二进制输出"""
+    return subprocess.run(args, capture_output=True).stdout
 
 
 def get_token():
@@ -136,14 +145,20 @@ def main():
     # --- 2) 上传新 blob ---
     print('\n上传 blob：')
     entries = []
-    for path, mode, _sha in changed:
-        with open(path, 'rb') as f:
-            content = f.read()
+    for path, mode, sha in changed:
+        # 关键：从 git 对象库取内容，不读工作区文件。
+        # Windows 上 core.autocrlf=true 会把工作区文件变成 CRLF，
+        # 直接读磁盘会把 CRLF 写进仓库（仓库里其它文件都是 LF），
+        # 而且 blob sha 会和本地不一致，导致每次推送都重复上传同一个文件。
+        content = sh_bytes(['git', 'cat-file', 'blob', sha])
         r = api('POST', '/repos/%s/git/blobs' % REPO, {
             'content': base64.b64encode(content).decode(),
             'encoding': 'base64',
         })
         entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': r['sha']})
+        if r['sha'] != sha:
+            print('  ! %s 上传后的 sha 与本地不一致：%s ≠ %s' %
+                  (path, r['sha'][:8], sha[:8]))
         print('  ✔ %-30s %7d 字节 → %s' % (path, len(content), r['sha'][:8]))
     for path in deleted:
         entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
