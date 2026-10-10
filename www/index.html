@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#4f6ef7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<title>课表 · CourseTable</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ============ 课表页 ============ -->
+<section class="page active" id="page-schedule">
+  <header class="topbar">
+    <div class="week-nav">
+      <button class="icon-btn" id="btnPrevWeek" aria-label="上一周">‹</button>
+      <button class="week-title" id="btnPickWeek">
+        <span id="weekLabel">第 1 周</span>
+        <small id="weekSub">周一</small>
+      </button>
+      <button class="icon-btn" id="btnNextWeek" aria-label="下一周">›</button>
+    </div>
+    <button class="icon-btn" id="btnToday">今</button>
+  </header>
+
+  <div class="grid-wrap">
+    <div class="grid-head">
+      <div class="corner">
+        <span id="monthLabel">10月</span>
+      </div>
+      <div class="dow" data-dow="1"><b>一</b><i>1</i></div>
+      <div class="dow" data-dow="2"><b>二</b><i>2</i></div>
+      <div class="dow" data-dow="3"><b>三</b><i>3</i></div>
+      <div class="dow" data-dow="4"><b>四</b><i>4</i></div>
+      <div class="dow" data-dow="5"><b>五</b><i>5</i></div>
+      <div class="dow" data-dow="6"><b>六</b><i>6</i></div>
+      <div class="dow" data-dow="7"><b>日</b><i>7</i></div>
+    </div>
+    <div class="grid-scroll">
+      <div class="grid-body" id="gridBody">
+        <!-- JS 渲染 -->
+      </div>
+    </div>
+  </div>
+
+  <div class="empty-hint" id="emptyHint">
+    <div class="eh-icon">📚</div>
+    <p>还没有课程</p>
+    <button class="btn primary" data-goto="page-import">去导入课表</button>
+  </div>
+</section>
+
+<!-- ============ 导入页 ============ -->
+<section class="page" id="page-import">
+  <header class="topbar simple"><h1>导入课表</h1></header>
+  <div class="scroll">
+
+    <div class="card entry" data-open="file">
+      <div class="entry-ico file">📄</div>
+      <div class="entry-txt">
+        <h3>文件 / PDF 导入<em class="badge">最稳</em></h3>
+        <p>教务导出的课表 PDF、xls、csv，或粘贴页面源码</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
+    <div class="card entry" data-open="jw">
+      <div class="entry-ico jw">🏫</div>
+      <div class="entry-txt">
+        <h3>正方教务系统导入</h3>
+        <p>输学号密码自动抓取；若该校用滑块验证码则需改用其他方式</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
+    <div class="card entry" data-open="image">
+      <div class="entry-ico img">🖼️</div>
+      <div class="entry-txt">
+        <h3>图片识别导入</h3>
+        <p>截图 / 拍照课表，OCR 或 AI 识别</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
+    <div class="card entry" data-open="manual">
+      <div class="entry-ico man">✏️</div>
+      <div class="entry-txt">
+        <h3>手动添加课程</h3>
+        <p>一门一门自己填</p>
+      </div>
+      <span class="chev">›</span>
+    </div>
+
+    <div class="tip-box">
+      <b>提示</b>导入的课程会先进入「待确认列表」，核对无误后再写入课表，不会覆盖已有数据。
+    </div>
+
+    <div class="tip-box">
+      <b>哪条路走得通</b>教务系统导出的课表文件（PDF / Excel）最好用，成功率最高。
+      能自己登录教务并能截图的话，图片识别也可以。需要输入学号密码自动抓取的那条路，取决于学校系统：
+      新版正方用的是滑块验证码，必须人工拖动，App 不代做，这条路会走不通。
+    </div>
+  </div>
+</section>
+
+<!-- ============ 设置页 ============ -->
+<section class="page" id="page-settings">
+  <header class="topbar simple"><h1>设置</h1></header>
+  <div class="scroll">
+    <div class="card">
+      <h3 class="card-h">学期</h3>
+      <label class="row"><span>总周数</span><input type="number" id="setTotalWeeks" min="1" max="40"></label>
+      <label class="row"><span>第一周开始日期</span><input type="date" id="setStartDate"></label>
+      <label class="row"><span>当前周</span><input type="number" id="setCurrentWeek" min="1" max="40"></label>
+    </div>
+
+    <div class="card">
+      <h3 class="card-h">显示</h3>
+      <label class="row"><span>显示周末</span><input type="checkbox" id="setShowWeekend"></label>
+      <label class="row"><span>每天节数</span><input type="number" id="setPeriods" min="5" max="16"></label>
+    </div>
+
+    <div class="card">
+      <h3 class="card-h">AI 识别（图片导入用，可选）</h3>
+      <label class="row"><span>接口地址</span><input type="text" id="setApiBase" placeholder="https://api.openai.com/v1"></label>
+      <label class="row"><span>模型名</span><input type="text" id="setApiModel" placeholder="gpt-4o-mini"></label>
+      <label class="row"><span>API Key</span><input type="password" id="setApiKey" placeholder="sk-..."></label>
+      <p class="hint">仅在你使用「AI 识别」时才会发送图片。Key 只保存在本机，不会上传到任何其他服务器。</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card-h">数据</h3>
+      <button class="btn block" id="btnExport">导出课表 JSON</button>
+      <button class="btn block" id="btnImportJson">从 JSON 导入</button>
+      <button class="btn block danger" id="btnClear">清空所有课程</button>
+      <p class="hint" id="dataStat">—</p>
+    </div>
+
+    <div class="tip-box">
+      <b>关于</b>课表 v1.0 · 数据全部保存在本机，卸载 App 会一并清除，建议定期导出备份。
+    </div>
+  </div>
+</section>
+
+<!-- 底部导航 -->
+<nav class="tabbar">
+  <button class="tab active" data-goto="page-schedule"><span>📅</span>课表</button>
+  <button class="tab" data-goto="page-import"><span>⬇️</span>导入</button>
+  <button class="tab" data-goto="page-settings"><span>⚙️</span>设置</button>
+</nav>
+
+<!-- ============ 弹层：教务导入 ============ -->
+<div class="sheet" id="sheet-jw">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-h"><h2>正方教务系统</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="sheet-b">
+      <div class="warn" id="jwWarn"></div>
+      <div class="hint" id="jwWebHint">当前是网页预览，浏览器的跨域限制会拦掉教务请求，验证码取不出来。教务直连需要在打包后的 App 里使用；此处请改用「图片识别」或「文件导入」。</div>
+      <label class="row"><span>教务地址</span><input type="text" id="jwBase" placeholder="https://jwgl.your.edu.cn"></label>
+      <label class="row"><span>系统版本</span>
+        <select id="jwVariant">
+          <option value="jwglxt">新版 /jwglxt（多数学校）</option>
+          <option value="jsxsd">旧版 /jsxsd</option>
+          <option value="root">根路径 / 自定义</option>
+        </select>
+      </label>
+      <label class="row"><span>学号</span><input type="text" id="jwUser" autocomplete="off"></label>
+      <label class="row"><span>密码</span><input type="password" id="jwPass"></label>
+      <div class="row captcha-row" id="jwCapRow">
+        <input type="text" id="jwCode" placeholder="看图填验证码" autocomplete="off">
+        <div class="cap-box" id="capBox">
+          <img id="jwCaptcha" alt="验证码">
+          <span class="cap-tip" id="capTip">点下方<br>① 取图</span>
+        </div>
+        <button class="btn small" id="jwRefreshCode">换一张</button>
+      </div>
+      <label class="row"><span>学年</span><input type="text" id="jwXnm" placeholder="2026" inputmode="numeric"></label>
+      <label class="row"><span>学期</span>
+        <select id="jwXqm">
+          <option value="3">第 1 学期（秋）</option>
+          <option value="12">第 2 学期（春）</option>
+        </select>
+      </label>
+      <div class="row btns">
+        <button class="btn block" id="jwGetCode">① 获取验证码</button>
+        <button class="btn primary block" id="jwLogin">② 登录并抓取</button>
+      </div>
+      <details class="adv">
+        <summary>高级：接口路径（抓不到时微调）</summary>
+        <label class="row"><span>登录页</span><input type="text" id="p_login"></label>
+        <label class="row"><span>公钥接口</span><input type="text" id="p_pubkey"></label>
+        <label class="row"><span>验证码接口</span><input type="text" id="p_code"></label>
+        <label class="row"><span>课表接口</span><input type="text" id="p_kb"></label>
+      </details>
+      <pre class="log" id="jwLog"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：图片导入 ============ -->
+<div class="sheet" id="sheet-image">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-h"><h2>图片识别导入</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="sheet-b">
+      <div class="row btns">
+        <button class="btn block" id="btnPickImg">选择图片</button>
+        <button class="btn block" id="btnTakeImg">拍照</button>
+      </div>
+      <input type="file" id="fileImg" accept="image/*" hidden>
+      <input type="file" id="fileImgCam" accept="image/*" capture="environment" hidden>
+      <div class="seg" id="ocrEngine">
+        <button class="seg-i" data-engine="ocr">本地 OCR（离线）</button>
+        <button class="seg-i active" data-engine="llm">AI 识别（更准）</button>
+      </div>
+      <div class="preview" id="imgPreview"><span>未选择图片</span></div>
+      <button class="btn primary block" id="btnRunOcr">开始识别</button>
+      <div class="progress" id="ocrProgress"><div class="bar" id="ocrBar"></div><span id="ocrMsg"></span></div>
+      <details class="adv">
+        <summary>识别出的原始文本</summary>
+        <pre class="log" id="ocrRaw"></pre>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：文件导入 ============ -->
+<div class="sheet" id="sheet-file">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-h"><h2>文件 / 网页导入</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="sheet-b">
+      <button class="btn block" id="btnPickFile">选择 PDF / xls / xlsx / csv / html</button>
+      <input type="file" id="fileDoc" accept=".pdf,.xls,.xlsx,.csv,.html,.htm,application/pdf,text/html,text/csv" hidden>
+      <p class="hint">教务导出的课表 <b>PDF 也能直接读</b>（要求 PDF 带文字层；扫描件请改用「图片识别」；设了打开密码的 PDF 要先去掉密码另存）。</p>
+      <p class="hint">另一条稳的路：在手机浏览器登录教务系统 → 进课表页面 → 长按全选复制 → 粘贴到下面框里。</p>
+      <textarea id="pasteHtml" rows="5" placeholder="在此粘贴课表页面源码或制表符表格…"></textarea>
+      <button class="btn primary block" id="btnParseFile">解析</button>
+      <pre class="log" id="fileLog"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：手动添加 ============ -->
+<div class="sheet" id="sheet-manual">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-h"><h2 id="manualTitle">添加课程</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="sheet-b">
+      <label class="row"><span>课程名</span><input type="text" id="mName" placeholder="高等数学"></label>
+      <div class="row two">
+        <label><span>教师</span><input type="text" id="mTeacher" placeholder="选填"></label>
+        <label><span>地点</span><input type="text" id="mPlace" placeholder="选填"></label>
+      </div>
+
+      <div class="fld">
+        <span class="fld-lb">星期 <em id="mDayHint">周一</em></span>
+        <div class="pick days" id="mDayPick"></div>
+      </div>
+
+      <div class="fld">
+        <span class="fld-lb">节次 <em id="mPeriodHint">第 1 节</em></span>
+        <div class="pick periods" id="mPeriodPick"></div>
+        <p class="hint">点第一个格子选起始节，再点一个选结束节；点同一格表示只占一节。</p>
+      </div>
+
+      <div class="fld">
+        <span class="fld-lb">周次</span>
+        <div class="pick" id="mWeekPick">
+          <button type="button" class="pk" data-weeks="1-16">1-16 周</button>
+          <button type="button" class="pk" data-weeks="1-8">前 8 周</button>
+          <button type="button" class="pk" data-weeks="9-16">后 8 周</button>
+          <button type="button" class="pk" data-weeks="full">全学期</button>
+          <button type="button" class="pk" data-weeks="单周">单周</button>
+          <button type="button" class="pk" data-weeks="双周">双周</button>
+        </div>
+        <input type="text" id="mWeeks" placeholder="也可手填：1-16 / 1-8,10-16 / 单周 / 双周">
+        <p class="hint">单周课只在奇数周出现，双周课只在偶数周出现，课表上会带「单」「双」角标。</p>
+      </div>
+
+      <input type="hidden" id="mDay" value="1">
+      <input type="hidden" id="mStart" value="1">
+      <input type="hidden" id="mEnd" value="1">
+
+      <div class="row btns">
+        <button class="btn primary block" id="mSave">保存</button>
+        <button class="btn block" id="mSaveNext">保存后再加一门</button>
+        <button class="btn block danger" id="mDelete" hidden>删除这门课</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：待确认列表 ============ -->
+<div class="sheet" id="sheet-confirm">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel">
+    <div class="sheet-h"><h2 id="cfTitle">确认课程</h2><button class="icon-btn" data-close>✕</button></div>
+    <div class="sheet-b">
+      <div class="list" id="cfList"></div>
+      <div class="row btns">
+        <button class="btn primary block" id="cfSaveAll">全部写入课表</button>
+        <button class="btn block" id="cfReplace">替换现有课表</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 弹层：课程详情 ============ -->
+<div class="sheet" id="sheet-detail">
+  <div class="sheet-mask" data-close></div>
+  <div class="sheet-panel short">
+    <div class="sheet-b">
+      <h2 id="dName">—</h2>
+      <p class="d-line" id="dMeta">—</p>
+      <div class="row btns">
+        <button class="btn block" id="dEdit">编辑</button>
+        <button class="btn block danger" id="dDel">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 吐司 -->
+<div class="toast" id="toast"></div>
+
+<script src="js/store.js"></script>
+<script src="js/bridge.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/import-jw.js"></script>
+<script src="js/import-ocr.js"></script>
+<script src="js/import-file.js"></script>
+<script src="js/app.js"></script>
+<script src="lib/tesseract.min.js" onerror="window.__TS_NOT_LOCAL=true"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+node_modules/
+.workbuddy/
+android/build/
+android/app/build/
+android/app/src/main/assets/public/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+*.log
+.DS_Store

@@ -1,0 +1,25 @@
+{
+  "name": "coursetable",
+  "version": "1.0.0",
+  "private": true,
+  "description": "手机课程表 App：正方教务直连导入 + 图片识别导入",
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android",
+    "build:android": "cap sync android && cd android && ./gradlew assembleDebug",
+    "test": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js && node scripts/smoke-ocr.js",
+    "test:core": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js",
+    "test:ocr": "node scripts/smoke-ocr.js",
+    "fixtures": "python scripts/make-test-pdf.py && python scripts/make-test-ocr-image.py"
+  },
+  "dependencies": {
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.9"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/cli": "^7.6.9",
+    "jsdom": "^30.1.2",
+    "pdfjs-dist": "3.11.174"
+  }
+}
