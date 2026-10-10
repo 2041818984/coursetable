@@ -144,9 +144,118 @@
     openSheet('sheet-detail');
   }
 
+  /* ---------------- 手动添加：点选控件 ---------------- */
+  var DAY_CN = ['一', '二', '三', '四', '五', '六', '日'];
+
+  function buildManualPicks() {
+    var dp = $('mDayPick');
+    if (dp && !dp.childElementCount) {
+      DAY_CN.forEach(function (s, i) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pk';
+        b.dataset.day = String(i + 1);
+        b.textContent = '周' + s;
+        dp.appendChild(b);
+      });
+    }
+    var pp = $('mPeriodPick');
+    if (pp && !pp.childElementCount) {
+      for (var p = 1; p <= 16; p++) {
+        var b2 = document.createElement('button');
+        b2.type = 'button';
+        b2.className = 'pk';
+        b2.dataset.period = String(p);
+        b2.textContent = String(p);
+        pp.appendChild(b2);
+      }
+    }
+  }
+
+  function syncManualPicks() {
+    var day = +$('mDay').value || 1;
+    var s = +$('mStart').value || 1;
+    var e = +$('mEnd').value || s;
+    var lo = Math.min(s, e), hi = Math.max(s, e);
+
+    Array.prototype.forEach.call($('mDayPick').children, function (b) {
+      b.classList.toggle('active', +b.dataset.day === day);
+    });
+    Array.prototype.forEach.call($('mPeriodPick').children, function (b) {
+      var p = +b.dataset.period;
+      b.classList.toggle('active', p === lo || p === hi);
+      b.classList.toggle('span', p > lo && p < hi);
+    });
+    $('mDayHint').textContent = '周' + DAY_CN[day - 1];
+    $('mPeriodHint').textContent = (lo === hi) ? ('第 ' + lo + ' 节') : ('第 ' + lo + '-' + hi + ' 节');
+  }
+
+  function syncWeekPick() {
+    var v = $('mWeeks').value.trim();
+    var total = S.settings().totalWeeks || 20;
+    Array.prototype.forEach.call($('mWeekPick').children, function (b) {
+      var want = b.dataset.weeks === 'full' ? ('1-' + total) : b.dataset.weeks;
+      b.classList.toggle('active', v === want);
+    });
+  }
+
+  /* 点格子选节次，用 anchor 记录起点：
+     第一次点 → 该格即单节；再点另一格 → 扩成两格之间的区间；
+     区间形成后 anchor 清空，下一次点击重新从单节开始。 */
+  function onPeriodClick(p) {
+    var mp = state.mpick || (state.mpick = { anchor: null });
+    if (mp.anchor == null || mp.anchor === p) {
+      $('mStart').value = p;
+      $('mEnd').value = p;
+      mp.anchor = p;
+    } else {
+      $('mStart').value = Math.min(mp.anchor, p);
+      $('mEnd').value = Math.max(mp.anchor, p);
+      mp.anchor = null;
+    }
+    syncManualPicks();
+  }
+
+  function saveManual(keepOpen) {
+    var name = $('mName').value.trim();
+    if (!name) { toast('请填写课程名'); $('mName').focus(); return false; }
+    var total = S.settings().totalWeeks || 20;
+    var weeks = S.parseWeeks($('mWeeks').value, total);
+    if (!weeks.length) weeks = S.parseWeeks('1-' + total, total);
+    var s = +$('mStart').value || 1;
+    var patch = {
+      name: name,
+      teacher: $('mTeacher').value.trim(),
+      place: $('mPlace').value.trim(),
+      day: +$('mDay').value || 1,
+      start: s,
+      end: Math.max(s, +$('mEnd').value || s),
+      weeks: weeks
+    };
+    if (state.editingId) S.update(state.editingId, patch);
+    else S.add(patch);
+    render();
+
+    if (keepOpen) {
+      state.editingId = null;
+      $('manualTitle').textContent = '添加课程';
+      $('mName').value = '';
+      $('mTeacher').value = '';
+      $('mPlace').value = '';
+      $('mDelete').hidden = true;
+      $('mName').focus();
+      toast('已保存，继续加下一门');
+    } else {
+      closeSheet('sheet-manual');
+      toast('已保存');
+    }
+    return true;
+  }
+
   function openManual(day, period, id) {
     var c = id ? S.courses().filter(function (x) { return x.id === id; })[0] : null;
     state.editingId = id || null;
+    buildManualPicks();
     $('manualTitle').textContent = c ? '编辑课程' : '添加课程';
     $('mName').value = c ? c.name : '';
     $('mTeacher').value = c ? c.teacher : '';
@@ -156,6 +265,10 @@
     $('mEnd').value = c ? c.end : (period || 1);
     $('mWeeks').value = c ? S.formatWeeks(c.weeks) : ('1-' + (S.settings().totalWeeks || 20));
     $('mDelete').hidden = !c;
+    $('mSaveNext').hidden = !!c;
+    state.mpick = { anchor: null };
+    syncManualPicks();
+    syncWeekPick();
     closeSheet('sheet-detail');
     openSheet('sheet-manual');
   }
@@ -400,7 +513,7 @@
   function runFileImport(file, text) {
     clearLog($('fileLog'));
     var job = file
-      ? FileImport.parseFile(file, S.settings().totalWeeks)
+      ? FileImport.parseFile(file, S.settings().totalWeeks, function (m) { log($('fileLog'), m); })
       : FileImport.parseText(text, S.settings().totalWeeks);
     job.then(function (r) {
       log($('fileLog'), '解析出 ' + r.courses.length + ' 条记录');
@@ -504,7 +617,12 @@
       var c = e.target.closest('[data-close]');
       if (c) { closeSheet(); return; }
       var o = e.target.closest('[data-open]');
-      if (o) { openSheet('sheet-' + o.dataset.open); return; }
+      if (o) {
+        // 手动添加走 openManual，这样点选控件会被正确初始化并填好默认值
+        if (o.dataset.open === 'manual') { openManual(null, null, null); return; }
+        openSheet('sheet-' + o.dataset.open);
+        return;
+      }
     });
 
     // 周次
@@ -521,25 +639,28 @@
       if (cell) openManual(+cell.dataset.day, +cell.dataset.period);
     });
 
-    // 手动表单
-    $('mSave').addEventListener('click', function () {
-      var name = $('mName').value.trim();
-      if (!name) { toast('请填写课程名'); return; }
-      var patch = {
-        name: name,
-        teacher: $('mTeacher').value.trim(),
-        place: $('mPlace').value.trim(),
-        day: +$('mDay').value,
-        start: +$('mStart').value,
-        end: Math.max(+$('mStart').value, +$('mEnd').value),
-        weeks: S.parseWeeks($('mWeeks').value, S.settings().totalWeeks)
-      };
-      if (state.editingId) S.update(state.editingId, patch);
-      else S.add(patch);
-      closeSheet('sheet-manual');
-      render();
-      toast('已保存');
+    // 手动表单：点选式星期 / 节次 / 周次
+    $('mSave').addEventListener('click', function () { saveManual(false); });
+    $('mSaveNext').addEventListener('click', function () { saveManual(true); });
+    $('mDayPick').addEventListener('click', function (e) {
+      var b = e.target.closest('.pk');
+      if (!b) return;
+      $('mDay').value = b.dataset.day;
+      syncManualPicks();
     });
+    $('mPeriodPick').addEventListener('click', function (e) {
+      var b = e.target.closest('.pk');
+      if (!b) return;
+      onPeriodClick(+b.dataset.period);
+    });
+    $('mWeekPick').addEventListener('click', function (e) {
+      var b = e.target.closest('.pk');
+      if (!b) return;
+      var total = S.settings().totalWeeks || 20;
+      $('mWeeks').value = b.dataset.weeks === 'full' ? ('1-' + total) : b.dataset.weeks;
+      syncWeekPick();
+    });
+    $('mWeeks').addEventListener('input', syncWeekPick);
     $('mDelete').addEventListener('click', function () {
       if (!state.editingId) return;
       S.remove(state.editingId);

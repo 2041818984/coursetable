@@ -72,6 +72,14 @@
     if (m) return { start: +m[1], end: +m[1], raw: m[0] };
     m = t.match(/(\d{1,2})\s*[，,、]\s*(\d{1,2})\s*节/);
     if (m) return { start: Math.min(+m[1], +m[2]), end: Math.max(+m[1], +m[2]), raw: m[0] };
+    // 序号写法：No.1 / No.1-2
+    m = t.match(/^no\.?\s*(\d{1,2})(?:\s*[-~—]\s*(\d{1,2}))?$/i);
+    if (m) return { start: +m[1], end: m[2] ? +m[2] : +m[1], raw: m[0] };
+    // 光一个数字，且落在合理节次范围内（节次列常见写法）
+    if (/^\d{1,2}$/.test(t)) {
+      var n = +t;
+      if (n >= 1 && n <= 20) return { start: n, end: n, raw: t };
+    }
     return null;
   }
 
@@ -140,11 +148,27 @@
     if (!out._src) return out;
 
     var w = extractWeeks(out._src, totalWeeks);
+    if (!w.raw) {
+      // 不少课表周次后面不写「周」字，只有 1-16 这种。用跨度把节次写法排除掉：
+      // 1-2、1-4 这类是节次，跨度大得多（>=5）才当周次。
+      var mTail = trim(out._src).match(/(\d{1,2})\s*[-~—－]\s*(\d{1,2})\s*$/);
+      if (mTail) {
+        var wa = +mTail[1], wb = +mTail[2];
+        if (Math.abs(wb - wa) >= 5 && wa >= 1 && wb <= 30) {
+          w = { weeks: range(Math.min(wa, wb), Math.max(wa, wb)), raw: mTail[0] };
+        }
+      }
+    }
     out.weeks = w.weeks;
-    var rest = out._src.split(w.raw).join(' ');
+    // 注意：raw 可能为空串，直接 split('') 会把整段文字按字符拆开，
+    // 结果课程名变成 "M a t h" 这种。没有命中就保持原文。
+    var rest = w.raw ? out._src.split(w.raw).join(' ') : out._src;
 
     var p = extractPeriods(rest) || extractTimePeriods(rest);
-    if (p) { out.periods = { start: p.start, end: p.end }; rest = rest.split(p.raw).join(' '); }
+    if (p && p.raw) {
+      out.periods = { start: p.start, end: p.end };
+      rest = rest.split(p.raw).join(' ');
+    }
 
     // 按换行 / 多个空格 拆成片段；OCR 常常没有换行，这里再尝试按「课程名|人名|地点」硬切
     var parts = rest.split(/\n+|\s{2,}|[|｜]+/).map(trim).filter(Boolean);
@@ -201,7 +225,7 @@
     // 1) 定位表头行（含星期字样最多的那一行）
     var headIdx = -1, bestScore = 0;
     for (var i = 0; i < Math.min(rows.length, 5); i++) {
-      var score = rows[i].filter(function (c) { return /星期|周[一二三四五六日天]|^[一二三四五六日天]$/.test(c); }).length;
+      var score = rows[i].filter(function (c) { return dayOfHeader(c) > 0; }).length;
       if (score > bestScore) { bestScore = score; headIdx = i; }
     }
 
@@ -209,8 +233,8 @@
     var colToDay = {};
     if (headIdx >= 0 && bestScore >= 2) {
       rows[headIdx].forEach(function (c, j) {
-        var m = c.match(/星期([一二三四五六日天])/) || c.match(/^周?([一二三四五六日天])$/);
-        if (m) colToDay[j] = i2d(m[1]);
+        var d = dayOfHeader(c);
+        if (d) colToDay[j] = d;
       });
     } else {
       // 没有表头：假设第 0 列是节次，其后依次周一→周日
@@ -262,6 +286,22 @@
   function i2d(ch) {
     var idx = DOW_WORDS.indexOf(ch);
     return idx < 0 ? 0 : idx + 1;
+  }
+
+  /* 表头单元格 → 星期序号（1-7），认不出来返回 0。
+     除了中文，也认英文简写：有的教务导出是 Mon/Tue 这种。 */
+  var EN_DOW = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+  function dayOfHeader(cell) {
+    var c = trim(cell);
+    if (!c) return 0;
+    var m = c.match(/星期([一二三四五六日天])/);
+    if (m) return i2d(m[1]);
+    m = c.match(/^周?([一二三四五六日天])$/);
+    if (m) return i2d(m[1]);
+    m = c.match(/^(mon|tue|wed|thu|fri|sat|sun)/i);
+    if (m) return EN_DOW.indexOf(m[1].toLowerCase()) + 1;
+    return 0;
   }
 
   /* ============ 正方 kbList → 课程 ============ */
@@ -392,11 +432,16 @@
     }
     rowsW.push(cur);
 
-    // 列边界：取所有词块左边界之间最大的几个空隙作为分隔
+    // 列边界：取所有词块左边界之间最大的几个空隙作为分隔。
+    // 同一列的词块 x0 相同，0 间隙必须先滤掉，否则会切出空列。
     var xs = ws.map(function (w) { return w.bbox.x0; }).sort(function (a, b) { return a - b; });
     var edges = [xs[0]];
     var gaps = [];
-    for (var g = 1; g < xs.length; g++) gaps.push({ gap: xs[g] - xs[g - 1], at: (xs[g] + xs[g - 1]) / 2 });
+    for (var g = 1; g < xs.length; g++) {
+      var d = xs[g] - xs[g - 1];
+      if (d <= 0) continue;
+      gaps.push({ gap: d, at: (xs[g] + xs[g - 1]) / 2 });
+    }
     gaps.sort(function (a, b) { return b.gap - a.gap; });
     var wantCols = 8; // 节次列 + 7 天
     gaps.slice(0, Math.max(1, wantCols - 1)).forEach(function (o) { edges.push(o.at); });
@@ -418,6 +463,88 @@
       return arr;
     });
     return mergeBlockRows(matrix, maxDepth);
+  }
+
+  /* PDF / 网页等坐标精确的来源：以「节次锚点行」切分表格行。
+     一个课程格里往往有课程名、教师、地点、周次多行文字；如果按「列是否已闭合」去猜
+     要不要合并，很容易把上一节和下一节串成一格。这里改用节次列本身做锚：
+     一个只含节次标记的物理行，连同它下面到下一个锚点之前的行，合成一个表格行。 */
+  function wordsToTableByAnchor(words, minConf) {
+    minConf = minConf == null ? 40 : minConf;
+    var ws = (words || []).filter(function (w) {
+      return w && trim(w.text) && (!w.confidence || w.confidence >= minConf);
+    });
+    if (!ws.length) return [];
+
+    // 行聚类
+    var sorted = ws.slice().sort(function (a, b) { return a.bbox.y0 - b.bbox.y0; });
+    var heights = sorted.map(function (w) { return Math.max(4, w.bbox.y1 - w.bbox.y0); });
+    heights.sort(function (a, b) { return a - b; });
+    var medH = heights[Math.floor(heights.length / 2)] || 20;
+    var phys = [], cur = [sorted[0]];
+    for (var i = 1; i < sorted.length; i++) {
+      if (sorted[i].bbox.y0 - cur[cur.length - 1].bbox.y0 > medH * 0.7) { phys.push(cur); cur = []; }
+      cur.push(sorted[i]);
+    }
+    phys.push(cur);
+
+    // 列边界。同一列的多个词块 x0 完全相同，会产生 0 间隙，
+    // 若不过滤就会切出一堆空列，所以只取真正有间距的位置。
+    var xs = ws.map(function (w) { return w.bbox.x0; }).sort(function (a, b) { return a - b; });
+    var edges = [xs[0]], gaps = [];
+    for (var g = 1; g < xs.length; g++) {
+      var d = xs[g] - xs[g - 1];
+      if (d <= 0) continue;
+      gaps.push({ gap: d, at: (xs[g] + xs[g - 1]) / 2 });
+    }
+    gaps.sort(function (a, b) { return b.gap - a.gap; });
+    gaps.slice(0, Math.max(1, 8 - 1)).forEach(function (o) { edges.push(o.at); });
+    edges.sort(function (a, b) { return a - b; });
+
+    function colOf(x) {
+      var best = 0;
+      for (var e = 0; e < edges.length; e++) if (x >= edges[e]) best = e;
+      return best;
+    }
+
+    var rows = phys.map(function (row) {
+      var arr = new Array(edges.length).fill('');
+      row.sort(function (a, b) { return a.bbox.x0 - b.bbox.x0; });
+      row.forEach(function (w) {
+        var c = colOf(w.bbox.x0);
+        arr[c] = (arr[c] ? arr[c] + ' ' : '') + trim(w.text);
+      });
+      return arr;
+    });
+
+    // 锚点：这一行只有一格有内容，且该内容像节次/序号
+    var ANCHOR = /^(?:第\s*)?\d{1,2}\s*节?$|^第\s*\d{1,2}\s*[-~－]\s*\d{1,2}\s*节$|^no\.?\s*\d+$|^\d{1,2}:\d{2}/i;
+    function isAnchor(r) {
+      var cnt = 0, only = '';
+      for (var c = 0; c < r.length; c++) {
+        var t = String(r[c] || '').trim();
+        if (t) { cnt++; only = t; }
+      }
+      return cnt === 1 && ANCHOR.test(only);
+    }
+
+    var out = [];
+    for (var k = 0; k < rows.length; k++) {
+      if (!isAnchor(rows[k])) { out.push(rows[k].slice()); continue; }
+      var grp = [rows[k]], j = k + 1;
+      while (j < rows.length && !isAnchor(rows[j])) { grp.push(rows[j]); j++; }
+      var merged = new Array(edges.length).fill('');
+      grp.forEach(function (r) {
+        r.forEach(function (v, c) {
+          var t = String(v == null ? '' : v).trim();
+          if (!t) return;
+          merged[c] = merged[c] ? (merged[c] + '\n' + t) : t;
+        });
+      });
+      out.push(merged);
+      k = j - 1;
+    }
+    return out;
   }
 
   /* 已知网格线时（由图片线条检测得到），直接把词块投进对应单元格，准确率更高 */
@@ -453,6 +580,7 @@
     parseTable: parseTable,
     parseJwList: parseJwList,
     wordsToTable: wordsToTable,
+    wordsToTableByAnchor: wordsToTableByAnchor,
     wordsToGrid: wordsToGrid,
     mergeBlockRows: mergeBlockRows,
     normCell: normCell,

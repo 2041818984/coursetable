@@ -3,7 +3,26 @@
   'use strict';
 
   var CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/';
+  var CORE_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/';
+  var LANG_CDN = 'https://tessdata.projectnaptha.com/4.0.0/';
   var LANG = 'chi_sim+eng';
+
+  /* 转成绝对地址：worker 内部用 importScripts 取核心，相对路径会解析错 */
+  function abs(p) {
+    try { return new URL(p, location.href).href; } catch (e) { return p; }
+  }
+
+  /* 识别引擎的三段回退：本地 SIMD 核心 → 本地标准核心 → 在线 CDN。
+     语言包与核心都已随包附带，因此正常情况下完全离线可用，
+     只有本地资源缺失（例如把 www 单独拷到别处）才会走 CDN。 */
+  function recognizeChain() {
+    var lib = abs('lib/');
+    return [
+      { tag: '本地模型', worker: abs('lib/worker.min.js'), core: abs('lib/tesseract-core-simd.wasm.js'), lang: lib },
+      { tag: '本地模型（兼容）', worker: abs('lib/worker.min.js'), core: abs('lib/tesseract-core.wasm.js'), lang: lib },
+      { tag: '在线模型', worker: CDN + 'worker.min.js', core: CORE_CDN + 'tesseract-core-simd.wasm.js', lang: LANG_CDN }
+    ];
+  }
 
   var tessPromise = null;
 
@@ -128,17 +147,36 @@
       return loadTesseract(function (m) { if (onProgress) onProgress(m); });
     })
       .then(function (T) {
-        if (onProgress) onProgress('正在加载中文识别模型（首次需要联网下载，之后离线可用）…');
-        return T.recognize(dataUrl, LANG, {
-          logger: function (m) {
-            if (!onProgress) return;
-            if (m.status === 'recognizing text' && m.progress != null) {
-              onProgress('识别中 ' + Math.round(m.progress * 100) + '%', m.progress);
-            } else if (m.status) {
-              onProgress(statusText(m.status), m.progress);
-            }
+        var chain = recognizeChain();
+        var lastErr = null;
+
+        function attempt(i) {
+          if (i >= chain.length) {
+            var why = (lastErr && lastErr.message) ? lastErr.message : '未知原因';
+            throw new Error('识别引擎初始化失败（' + why + '）。本地模型缺失时可尝试联网，或改用「AI 识别」。');
           }
-        });
+          var cfg = chain[i];
+          if (onProgress) onProgress('加载「' + cfg.tag + '」（中文模型约 19MB，首次稍慢）…');
+          return T.recognize(dataUrl, LANG, {
+            workerPath: cfg.worker,
+            corePath: cfg.core,
+            langPath: cfg.lang,
+            workerBlobURL: false,
+            logger: function (m) {
+              if (!onProgress) return;
+              if (m.status === 'recognizing text' && m.progress != null) {
+                onProgress('识别中 ' + Math.round(m.progress * 100) + '%', m.progress);
+              } else if (m.status) {
+                onProgress(statusText(m.status), m.progress);
+              }
+            }
+          }).catch(function (e) {
+            lastErr = e;
+            if (onProgress) onProgress('· ' + cfg.tag + ' 不可用：' + ((e && e.message) || e) + '，尝试下一种…');
+            return attempt(i + 1);
+          });
+        }
+        return attempt(0);
       })
       .then(function (res) {
         var d = res && res.data || {};
@@ -170,7 +208,7 @@
       'loading tesseract core': '加载核心…',
       'initializing tesseract': '初始化…',
       'initialized tesseract': '初始化完成',
-      'loading language traineddata': '下载中文模型…',
+      'loading language traineddata': '加载中文模型…',
       'loaded language traineddata': '模型就绪',
       'initializing api': '准备识别…',
       'recognizing text': '识别中'

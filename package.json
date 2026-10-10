@@ -6,7 +6,8 @@
   "scripts": {
     "sync": "cap sync",
     "open:android": "cap open android",
-    "build:android": "cap sync android && cd android && ./gradlew assembleDebug"
+    "build:android": "cap sync android && cd android && ./gradlew assembleDebug",
+    "test": "node scripts/selftest.js && node scripts/smoke-dom.js && node scripts/smoke-jw.js && node scripts/smoke-pdf.js"
   },
   "dependencies": {
     "@capacitor/app": "^7.1.2",
@@ -14,6 +15,8 @@
   },
   "devDependencies": {
     "@capacitor/android": "^7.6.9",
-    "@capacitor/cli": "^7.6.9"
+    "@capacitor/cli": "^7.6.9",
+    "jsdom": "^30.1.2",
+    "pdfjs-dist": "3.11.174"
   }
 }

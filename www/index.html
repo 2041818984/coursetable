@@ -228,9 +228,10 @@
   <div class="sheet-panel">
     <div class="sheet-h"><h2>文件 / 网页导入</h2><button class="icon-btn" data-close>✕</button></div>
     <div class="sheet-b">
-      <button class="btn block" id="btnPickFile">选择 xls / xlsx / csv / html</button>
-      <input type="file" id="fileDoc" accept=".xls,.xlsx,.csv,.html,.htm,text/html,text/csv" hidden>
-      <p class="hint">推荐做法：在手机浏览器登录教务系统 → 进课表页面 → 长按全选复制 → 粘贴到下面框里。也可以用「图片识别」直接截图。</p>
+      <button class="btn block" id="btnPickFile">选择 PDF / xls / xlsx / csv / html</button>
+      <input type="file" id="fileDoc" accept=".pdf,.xls,.xlsx,.csv,.html,.htm,application/pdf,text/html,text/csv" hidden>
+      <p class="hint">教务导出的课表 <b>PDF 也能直接读</b>（要求 PDF 带文字层；扫描件请改用「图片识别」；设了打开密码的 PDF 要先去掉密码另存）。</p>
+      <p class="hint">另一条稳的路：在手机浏览器登录教务系统 → 进课表页面 → 长按全选复制 → 粘贴到下面框里。</p>
       <textarea id="pasteHtml" rows="5" placeholder="在此粘贴课表页面源码或制表符表格…"></textarea>
       <button class="btn primary block" id="btnParseFile">解析</button>
       <pre class="log" id="fileLog"></pre>
@@ -245,18 +246,42 @@
     <div class="sheet-h"><h2 id="manualTitle">添加课程</h2><button class="icon-btn" data-close>✕</button></div>
     <div class="sheet-b">
       <label class="row"><span>课程名</span><input type="text" id="mName" placeholder="高等数学"></label>
-      <label class="row"><span>教师</span><input type="text" id="mTeacher"></label>
-      <label class="row"><span>地点</span><input type="text" id="mPlace" placeholder="A101"></label>
-      <label class="row"><span>星期</span>
-        <select id="mDay"><option value="1">周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="7">周日</option></select>
-      </label>
       <div class="row two">
-        <label><span>开始节</span><input type="number" id="mStart" min="1" max="16" value="1"></label>
-        <label><span>结束节</span><input type="number" id="mEnd" min="1" max="16" value="2"></label>
+        <label><span>教师</span><input type="text" id="mTeacher" placeholder="选填"></label>
+        <label><span>地点</span><input type="text" id="mPlace" placeholder="选填"></label>
       </div>
-      <label class="row"><span>周次</span><input type="text" id="mWeeks" placeholder="1-16 或 1-8,10-16"></label>
+
+      <div class="fld">
+        <span class="fld-lb">星期 <em id="mDayHint">周一</em></span>
+        <div class="pick days" id="mDayPick"></div>
+      </div>
+
+      <div class="fld">
+        <span class="fld-lb">节次 <em id="mPeriodHint">第 1 节</em></span>
+        <div class="pick periods" id="mPeriodPick"></div>
+        <p class="hint">点第一个格子选起始节，再点一个选结束节；点同一格表示只占一节。</p>
+      </div>
+
+      <div class="fld">
+        <span class="fld-lb">周次</span>
+        <div class="pick" id="mWeekPick">
+          <button type="button" class="pk" data-weeks="1-16">1-16 周</button>
+          <button type="button" class="pk" data-weeks="1-8">前 8 周</button>
+          <button type="button" class="pk" data-weeks="9-16">后 8 周</button>
+          <button type="button" class="pk" data-weeks="full">全学期</button>
+          <button type="button" class="pk" data-weeks="单周">单周</button>
+          <button type="button" class="pk" data-weeks="双周">双周</button>
+        </div>
+        <input type="text" id="mWeeks" placeholder="也可手填：1-16 或 1-8,10-16">
+      </div>
+
+      <input type="hidden" id="mDay" value="1">
+      <input type="hidden" id="mStart" value="1">
+      <input type="hidden" id="mEnd" value="1">
+
       <div class="row btns">
         <button class="btn primary block" id="mSave">保存</button>
+        <button class="btn block" id="mSaveNext">保存后再加一门</button>
         <button class="btn block danger" id="mDelete" hidden>删除这门课</button>
       </div>
     </div>

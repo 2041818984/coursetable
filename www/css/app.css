@@ -157,6 +157,22 @@ button{cursor:pointer}
 .btn[disabled]{opacity:.5}
 .btns{display:flex;flex-direction:column;gap:8px}
 
+/* ---------- 手动添加：点选式选择器 ---------- */
+.fld{margin:14px 0}
+.fld-lb{display:block;font-size:13px;color:var(--tx2);margin-bottom:8px}
+.fld-lb em{font-style:normal;color:var(--brand);font-weight:600}
+.pick{display:flex;flex-wrap:wrap;gap:6px}
+.pk{
+  flex:1 1 0;min-width:46px;padding:9px 8px;font-size:13px;
+  border:1px solid var(--line);border-radius:9px;background:var(--card);
+  color:var(--tx);cursor:pointer;text-align:center;
+}
+.pk:active{background:#f2f4f8}
+.pk.active{background:var(--brand);border-color:var(--brand);color:#fff}
+.pk.span{background:#e8edff;border-color:#c7d4ff;color:var(--brand)}
+.pick.periods{display:grid;grid-template-columns:repeat(8,1fr);gap:5px}
+.pick.periods .pk{min-width:0;padding:9px 0;font-size:12px}
+
 /* ---------- 底部导航 ---------- */
 .tabbar{
   position:fixed;left:0;right:0;bottom:0;height:calc(var(--tab-h) + var(--safe-b));
