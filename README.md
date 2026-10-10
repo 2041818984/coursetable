@@ -16,6 +16,28 @@
 
 三种导入都会先进入「待确认列表」，可以逐条改教师、地点、周次，勾选后再写入，不会直接覆盖已有课表。
 
+## 最终产物在哪
+
+**源码里没有 APK**，仓库里也不可能有——必须先在云端编译一次。完整链路：
+
+```
+本地源码（本目录）
+   │  git push
+   ▼
+GitHub Actions 构建机（ubuntu-latest，自带 JDK 17 + Android SDK）
+   │  ./gradlew assembleDebug
+   ▼
+构建机上的 android/app/build/outputs/apk/debug/app-debug.apk
+   │  打包成 artifact
+   ▼
+GitHub 网页 → 那次运行记录 → 页面最下方 Artifacts → coursetable-debug.zip
+   │  下载解压
+   ▼
+app-debug.apk  ← 你要的成品，传到手机安装
+```
+
+`android/app/build/outputs/apk/debug/app-debug.apk` 是**构建机上的路径**，在本地不存在。你拿到的地方是 GitHub 的 Artifacts 下载区。
+
 ## 目录结构
 
 ```
@@ -74,21 +96,19 @@ scripts/build-android.sh 本地构建 APK
 
 ### 路线 A：GitHub Actions 云端构建（不需要本机装 Android SDK）
 
-1. 在 GitHub 上新建一个空仓库，然后把它设为远端并推送：
+1. 在 GitHub 网页上新建一个**空**仓库（不要勾 README、不要选 .gitignore，否则推送会冲突）
+2. 一条命令完成推送（本地仓库已初始化并提交过，直接推即可）：
 
    ```bash
-   git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-   git branch -M main
-   git push -u origin main
+   bash scripts/push-to-github.sh https://github.com/<用户名>/<仓库名>.git
    ```
 
-   （本地仓库已初始化并做过首次提交，直接加远端推送即可）
+3. 推送本身就会自动触发一次构建（workflow 监听 main/master）。也可以手动触发：
+   Actions 页面 → 左侧选 `Build Android APK` → 右上角 **Run workflow** → 选 main → 确认
+4. 约 10 分钟后，点进那次运行记录，在页面最下方 **Artifacts** 区下载 `coursetable-debug`，
+   解压得到 `app-debug.apk`，传到手机安装
 
-2. Settings → Secrets and variables → Actions 里不需要配任何密钥
-3. Actions 页面选中 `Build Android APK`，点 Run workflow
-4. 跑完后在 Artifacts 里下载 `coursetable-debug`，解压得到 `app-debug.apk`，传到手机安装
-
-也可以直接在仓库根执行 `git push` 触发（workflow 监听 main/master 分支）。
+不需要配任何密钥（Settings → Secrets 里什么都不用加），构建不依赖仓库密钥。
 
 > `android/app/build/outputs/apk/debug/app-debug.apk` 是**构建成功后产物出现的位置**，源码里没有这个文件。
 > 看到这个路径不等于 APK 已经存在——本机没有 JDK / Android SDK，从未编译过。
