@@ -89,6 +89,14 @@ button{cursor:pointer}
 }
 .course b{font-weight:600;font-size:12px}
 .course span{opacity:.9;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 单/双周角标：只在单周课或双周课上出现 */
+.course.has-wk b{padding-right:14px}
+.course i.wk{
+  position:absolute;top:2px;right:2px;font-style:normal;
+  font-size:9px;line-height:1;font-weight:600;
+  padding:2px 3px;border-radius:5px;
+  background:rgba(255,255,255,.3);color:#fff;
+}
 .course:active{filter:brightness(.94)}
 
 /* ---------- 空态 ---------- */

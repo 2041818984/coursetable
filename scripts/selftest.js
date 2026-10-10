@@ -21,6 +21,22 @@ t('单周(20周)', JSON.stringify(S.parseWeeks('单周', 20)) === JSON.stringify
 t('(1-16)括号内', S.parseWeeks('(1-16)').length === 16);
 t('格式化回串', S.formatWeeks(S.parseWeeks('1-8,10-16')) === '1-8,10-16', S.formatWeeks(S.parseWeeks('1-8,10-16')));
 
+console.log('\n[1b] 单双周识别与显示');
+t('单周 20 周 → 10 个奇数周', S.parseWeeks('单周', 20).length === 10, S.parseWeeks('单周', 20));
+t('双周 20 周 → 10 个偶数周', S.parseWeeks('双周', 20)[0] === 2 && S.parseWeeks('双周', 20)[9] === 20, S.parseWeeks('双周', 20));
+t('奇数组显示为「单周」', S.formatWeeks(S.parseWeeks('单周', 20), 20) === '单周', S.formatWeeks(S.parseWeeks('单周', 20), 20));
+t('偶数组显示为「双周」', S.formatWeeks(S.parseWeeks('双周', 20), 20) === '双周', S.formatWeeks(S.parseWeeks('双周', 20), 20));
+t('weekParity 单周=1', S.weekParity(S.parseWeeks('单周', 20), 20) === 1);
+t('weekParity 双周=2', S.weekParity(S.parseWeeks('双周', 20), 20) === 2);
+t('奇数总周数也能认（19 周单周）', S.formatWeeks(S.parseWeeks('单周', 19), 19) === '单周');
+t('不完整的奇数组不叫单周', S.formatWeeks([1, 3, 5, 7], 20) === '1,3,5,7', S.formatWeeks([1, 3, 5, 7], 20));
+t('没给总周数就不下结论', S.formatWeeks([1, 3, 5, 7, 9, 11, 13, 15, 17, 19]) === '1,3,5,7,9,11,13,15,17,19');
+t('混合周次不是单双周', S.weekParity([1, 2, 3], 20) === 0);
+t('单周 round-trip 回写表单仍可解析', (function () {
+  var back = S.parseWeeks(S.formatWeeks(S.parseWeeks('单周', 20), 20), 20);
+  return JSON.stringify(back) === JSON.stringify(S.parseWeeks('单周', 20));
+})());
+
 console.log('\n[2] 单元格解析');
 var c1 = P.parseCell('高等数学A(1)\n张三\n教三-301\n1-16周', 20);
 t('课程名', c1.name === '高等数学A(1)', c1);

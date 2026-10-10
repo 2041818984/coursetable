@@ -113,8 +113,31 @@
     return out;
   }
 
-  function formatWeeks(arr) {
+  /* 判断这组周次是不是「完整的单周」或「完整的双周」。
+     返回 1 = 单周，2 = 双周，0 = 不是（普通周次串）。
+     必须给 total 才敢下结论：没有总周数时无从判断 1,3,5 是「单周」
+     还是「这门课只上前三周」，宁可退回数字串也不要说错。
+     另外要求它正好等于该学期奇（偶）数周的完整集合，
+     所以「1,3,5,7」在 20 周的学期里不会被误标成单周。 */
+  function weekParity(arr, total) {
+    if (!arr || !total || arr.length < 2) return 0;
+    var s = arr.slice().sort(function (a, b) { return a - b; });
+    var par = (s[0] % 2 === 0) ? 2 : 1;
+    for (var i = 0; i < s.length; i++) {
+      if ((s[i] % 2 === 0) !== (par === 2)) return 0;   // 奇偶混在一起
+      if (i && s[i] - s[i - 1] !== 2) return 0;         // 不是每隔一周
+    }
+    var expect = [];
+    for (var w = par; w <= total; w += 2) expect.push(w);
+    if (expect.length !== s.length) return 0;
+    if (expect[expect.length - 1] !== s[s.length - 1]) return 0;
+    return par;
+  }
+
+  function formatWeeks(arr, total) {
     if (!arr || !arr.length) return '';
+    var par = weekParity(arr, total);
+    if (par) return par === 1 ? '单周' : '双周';
     var s = arr.slice().sort(function (a, b) { return a - b; });
     var res = [], i = 0;
     while (i < s.length) {
@@ -193,7 +216,7 @@
     load: load, save: save,
     settings: settings, courses: courses,
     colorFor: colorFor,
-    parseWeeks: parseWeeks, formatWeeks: formatWeeks,
+    parseWeeks: parseWeeks, formatWeeks: formatWeeks, weekParity: weekParity,
     add: add, addMany: addMany, update: update, remove: remove,
     clear: clear, replaceAll: replaceAll, stat: stat, uid: uid,
     mondayOf: mondayOf

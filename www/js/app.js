@@ -64,7 +64,8 @@
 
     var days = st.showWeekend ? 7 : 5;
     $('weekLabel').textContent = '第 ' + state.week + ' 周';
-    $('weekSub').textContent = (state.week === autoCurrentWeek() ? '本周 · ' : '') + '共 ' + total + ' 周';
+    $('weekSub').textContent = (state.week === autoCurrentWeek() ? '本周 · ' : '') +
+      '共 ' + total + ' 周 · ' + (state.week % 2 ? '单周' : '双周');
 
     var ws = weekStartDate(state.week);
     $('monthLabel').textContent = (ws.getMonth() + 1) + '月';
@@ -117,11 +118,21 @@
       el.style.background = c.color || S.colorFor(c.name);
       el.style.gridColumn = String(c.day + 1);
       el.style.gridRow = c.start + ' / span ' + Math.max(1, c.end - c.start + 1);
-      el.innerHTML = '<b></b><span></span><span></span>';
+      el.innerHTML = '<b></b><span></span><span></span><i></i>';
       el.querySelector('b').textContent = c.name;
       var sp = el.querySelectorAll('span');
       sp[0].textContent = c.place || '';
       sp[1].textContent = c.teacher || '';
+      var wk = el.querySelector('i');
+      var par = S.weekParity(c.weeks, total);
+      if (par) {
+        el.classList.add('has-wk');
+        wk.className = 'wk';
+        wk.textContent = par === 1 ? '单' : '双';
+        wk.title = par === 1 ? '单周课' : '双周课';
+      } else {
+        wk.remove();
+      }
       el.dataset.id = c.id;
       frag.appendChild(el);
     });
@@ -140,7 +151,7 @@
       '教师：' + (c.teacher || '—') + '<br>' +
       '地点：' + (c.place || '—') + '<br>' +
       '时间：周' + '一二三四五六日'.charAt(c.day - 1) + ' 第 ' + c.start + '-' + c.end + ' 节<br>' +
-      '周次：' + (S.formatWeeks(c.weeks) || '全部');
+      '周次：' + (S.formatWeeks(c.weeks, S.settings().totalWeeks) || '全部');
     openSheet('sheet-detail');
   }
 
@@ -263,7 +274,7 @@
     $('mDay').value = c ? c.day : (day || 1);
     $('mStart').value = c ? c.start : (period || 1);
     $('mEnd').value = c ? c.end : (period || 1);
-    $('mWeeks').value = c ? S.formatWeeks(c.weeks) : ('1-' + (S.settings().totalWeeks || 20));
+    $('mWeeks').value = c ? S.formatWeeks(c.weeks, S.settings().totalWeeks) : ('1-' + (S.settings().totalWeeks || 20));
     $('mDelete').hidden = !c;
     $('mSaveNext').hidden = !!c;
     state.mpick = { anchor: null };
@@ -313,8 +324,10 @@
       badge.textContent = '周' + dowTxt.charAt(c.day - 1) + ' ' + c.start + '-' + c.end + '节';
       main.appendChild(badge);
 
+      var wt = S.formatWeeks(c.weeks, S.settings().totalWeeks);
+      if (wt && !/周$/.test(wt)) wt += '周';   // 「单周」「双周」本身已带周字，别再加
       var p = document.createElement('p');
-      p.textContent = [c.teacher, c.place, S.formatWeeks(c.weeks) + '周'].filter(Boolean).join(' · ');
+      p.textContent = [c.teacher, c.place, wt].filter(Boolean).join(' · ');
       main.appendChild(p);
 
       ['teacher', 'place'].forEach(function (k) {
@@ -328,7 +341,7 @@
 
       var wp = document.createElement('input');
       wp.className = 'editable';
-      wp.value = S.formatWeeks(c.weeks);
+      wp.value = S.formatWeeks(c.weeks, S.settings().totalWeeks);
       wp.placeholder = '周次，如 1-16';
       wp.oninput = function () { c.weeks = S.parseWeeks(wp.value, S.settings().totalWeeks); };
       main.appendChild(wp);

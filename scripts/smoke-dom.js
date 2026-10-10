@@ -113,5 +113,86 @@ if (cell) {
   t('课表网格存在可点空白格', false, '未找到 .cell');
 }
 
+console.log('\n[8] 单双周：显示、角标与周切换');
+$('sheet-manual').querySelector('[data-close]').click();
+w.Store.replaceAll([]);
+
+const pickWeek = v => Array.prototype.find.call($('mWeekPick').children, b => b.dataset.weeks === v);
+
+// 单周课：周一 第1节
+$('mName').value = '';
+$('mDayPick').children[0].click();
+$('mPeriodPick').children[0].click();
+const oddBtn = pickWeek('单周');
+t('周次区有「单周」按钮', !!oddBtn);
+oddBtn.click();
+t('点「单周」→ 输入框变「单周」', $('mWeeks').value === '单周', $('mWeeks').value);
+t('「单周」按钮高亮', oddBtn.classList.contains('active'));
+$('mName').value = '高数A';
+$('mSaveNext').click();
+
+// 双周课：周二 第1节
+const evenBtn = pickWeek('双周');
+t('周次区有「双周」按钮', !!evenBtn);
+evenBtn.click();
+t('点「双周」→ 输入框变「双周」', $('mWeeks').value === '双周', $('mWeeks').value);
+$('mDayPick').children[1].click();
+$('mPeriodPick').children[0].click();
+$('mName').value = '英语B';
+$('mSave').click();
+
+const two = w.Store.courses();
+t('两门课都写入', two.length === 2, two.length);
+const odd = two.filter(c => c.name === '高数A')[0];
+const even = two.filter(c => c.name === '英语B')[0];
+t('单周课 = 10 个奇数周', odd && odd.weeks.length === 10 && odd.weeks[0] === 1, odd && odd.weeks);
+t('双周课 = 10 个偶数周', even && even.weeks.length === 10 && even.weeks[0] === 2, even && even.weeks);
+
+// 退回第 1 周（奇数周）
+for (let i = 0; i < 40; i++) $('btnPrevWeek').click();
+t('停在「第 1 周」', /第 1 周/.test($('weekLabel').textContent), $('weekLabel').textContent);
+t('副标题提示当前是单周', /单周/.test($('weekSub').textContent), $('weekSub').textContent);
+
+let cards = w.document.querySelectorAll('#gridBody .course');
+t('第 1 周只出现单周课（双周课被过滤掉）', cards.length === 1, cards.length);
+t('出现的是高数A', cards.length === 1 && /高数A/.test(cards[0].textContent), cards[0] && cards[0].textContent);
+t('单周课带「单」角标', !!(cards.length === 1 && cards[0].querySelector('i.wk') &&
+  cards[0].querySelector('i.wk').textContent === '单'),
+  cards.length === 1 ? cards[0].textContent : cards.length);
+
+// 切到第 2 周（偶数周）
+$('btnNextWeek').click();
+t('切到「第 2 周」', /第 2 周/.test($('weekLabel').textContent), $('weekLabel').textContent);
+t('副标题提示当前是双周', /双周/.test($('weekSub').textContent), $('weekSub').textContent);
+cards = w.document.querySelectorAll('#gridBody .course');
+t('第 2 周只出现双周课', cards.length === 1, cards.length);
+t('出现的是英语B', cards.length === 1 && /英语B/.test(cards[0].textContent), cards[0] && cards[0].textContent);
+t('双周课带「双」角标', !!(cards.length === 1 && cards[0].querySelector('i.wk') &&
+  cards[0].querySelector('i.wk').textContent === '双'),
+  cards.length === 1 ? cards[0].textContent : cards.length);
+
+// 每周都上的课不该有角标
+w.Store.replaceAll([{ name: '体育', day: 3, start: 1, end: 1, weeks: w.Store.parseWeeks('1-16', 20) }]);
+w.document.getElementById('btnToday').click();
+const plain = w.document.querySelectorAll('#gridBody .course');
+t('每周课在第 1 周也显示', plain.length === 1, plain.length);
+t('每周课没有单双周角标', plain.length === 1 && !plain[0].querySelector('i.wk'));
+
+// 详情页文案
+plain[0].click();
+t('详情页周次显示为数字串', /周次：1-16/.test($('dMeta').textContent), $('dMeta').textContent);
+w.document.getElementById('sheet-detail').querySelector('[data-close]').click();
+w.Store.replaceAll([odd]);
+w.document.getElementById('btnToday').click();
+for (let i = 0; i < 40; i++) $('btnPrevWeek').click();
+const dc = w.document.querySelector('#gridBody .course');
+if (dc) {
+  dc.click();
+  t('详情页周次显示为「单周」', /周次：单周/.test($('dMeta').textContent), $('dMeta').textContent);
+  w.document.getElementById('sheet-detail').querySelector('[data-close]').click();
+} else {
+  t('单周课仍可点开详情', false, '未找到课程卡');
+}
+
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);
