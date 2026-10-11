@@ -16,6 +16,7 @@
     "probe:login": "python scripts/probe-hntou-login.py",
     "probe:kb": "python scripts/probe-hntou-kb.py",
     "fixtures": "python scripts/make-test-pdf.py && python scripts/make-test-ocr-image.py",
+    "preview": "node scripts/make-preview.js",
     "push": "python scripts/push-via-api.py"
   },
   "dependencies": {

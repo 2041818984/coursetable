@@ -4,20 +4,30 @@
 
   var KEY = 'coursetable_v1';
 
+  /* 每节课的起止时间。课表格子左侧那条时间轴显示的就是它。
+     学校之间作息差别很大，所以做成可改的（设置 → 作息时间），这里只是默认值。 */
+  var DEFAULT_TIMES = [
+    '08:00-08:45', '08:55-09:40', '10:00-10:45', '10:55-11:40',
+    '15:00-15:45', '15:55-16:40', '16:50-17:35', '17:45-18:30',
+    '20:00-20:45', '20:55-21:40', '21:50-22:35', '22:45-23:30'
+  ];
+
   var DEFAULT_SETTINGS = {
     totalWeeks: 20,
     startDate: mondayOf(new Date()).toISOString().slice(0, 10),
     currentWeek: 1,
     showWeekend: true,
     periods: 12,
+    periodTimes: DEFAULT_TIMES.slice(),
     api: { base: '', model: '', key: '' },
     jw: { base: '', variant: 'jwglxt', user: '', xnm: '', xqm: '3' }
   };
 
+  /* 马卡龙柔和色系：和主流课表 App 的观感一致，配白字对比度也够 */
   var PALETTE = [
-    '#4f6ef7', '#7c5cf0', '#e8654f', '#f0a63c',
-    '#3fbf7f', '#2bb3c0', '#e05a8f', '#6b7a99',
-    '#5c8ae0', '#9b6bd6'
+    '#e8737f', '#5b8fd6', '#6cc0a0', '#f0a63c',
+    '#a78bd6', '#4a7fc1', '#e8956f', '#7fb3e0',
+    '#8fbf7a', '#d98bb8', '#5cb8c4', '#c98a5a'
   ];
 
   var data = null;
@@ -166,6 +176,20 @@
     return res.join(',');
   }
 
+  /* ---- 节次时间 ----
+     课表左侧时间轴用它。取第 n 节的起止时间；写的是「08:00-08:45」这种，
+     也容忍只写一个开始时间。取不到就返回空串，UI 会退化成只显示节次号。 */
+  function periodTime(n) {
+    var arr = settings().periodTimes || DEFAULT_TIMES;
+    var t = arr[n - 1];
+    if (typeof t !== 'string') return { start: '', end: '' };
+    var norm = function (s) { return s.replace(/\s/g, '').replace('：', ':'); };
+    var m = t.match(/(\d{1,2}[:：]\d{2})\s*[-~—－]\s*(\d{1,2}[:：]\d{2})/);
+    if (m) return { start: norm(m[1]), end: norm(m[2]) };
+    var one = t.match(/(\d{1,2}[:：]\d{2})/);
+    return one ? { start: norm(one[1]), end: '' } : { start: '', end: '' };
+  }
+
   /* ---- 增删改 ---- */
   function add(c) {
     c = normalize(c);
@@ -243,11 +267,12 @@
   global.Store = {
     KEY: KEY,
     PALETTE: PALETTE,
+    DEFAULT_TIMES: DEFAULT_TIMES,
     load: load, save: save,
     settings: settings, courses: courses,
     colorFor: colorFor,
     parseWeeks: parseWeeks, formatWeeks: formatWeeks, weekParity: weekParity,
-    courseParity: courseParity,
+    courseParity: courseParity, periodTime: periodTime,
     add: add, addMany: addMany, update: update, remove: remove,
     clear: clear, replaceAll: replaceAll, stat: stat, uid: uid,
     mondayOf: mondayOf

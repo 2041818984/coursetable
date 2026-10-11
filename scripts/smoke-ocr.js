@@ -152,18 +152,19 @@ global.document = { createElement: function () { return stubCv; } };
 var bigImg = { naturalWidth: 3000, naturalHeight: 2000 };
 var sc = O.stripGridLines(bigImg, { xs: [0, 100, 200], ys: [0, 150, 300] });
 t('大图：返回结果非空', !!sc);
-// scale = min(2, max(0.5, 1800/3000)) = 0.6
-t('大图：画布缩到 1800×1200', stubCv.width === 1800 && stubCv.height === 1200, [stubCv.width, stubCv.height]);
-t('大图：xs 按 0.6 换算', sc && Math.abs(sc.grid.xs[1] - 60) < 0.01, sc && sc.grid.xs);
-t('大图：ys 按 0.6 换算', sc && Math.abs(sc.grid.ys[2] - 180) < 0.01, sc && sc.grid.ys);
+// scale = min(1.6, 1500/3000) = 0.5 —— 长边压到 1500，手机上才跑得动
+t('大图：画布缩到 1500×1000', stubCv.width === 1500 && stubCv.height === 1000, [stubCv.width, stubCv.height]);
+t('大图：长边不超过 1500', Math.max(stubCv.width, stubCv.height) <= 1500, [stubCv.width, stubCv.height]);
+t('大图：xs 按 0.5 换算', sc && Math.abs(sc.grid.xs[1] - 50) < 0.01, sc && sc.grid.xs);
+t('大图：ys 按 0.5 换算', sc && Math.abs(sc.grid.ys[2] - 150) < 0.01, sc && sc.grid.ys);
 t('输出为 PNG（无损）', !!sc && sc.dataUrl.indexOf('image/png') >= 0);
 
 stubCv.width = 0; stubCv.height = 0;
 var smallImg = { naturalWidth: 600, naturalHeight: 400 };
 var sc2 = O.stripGridLines(smallImg, { xs: [0, 100, 200], ys: [0, 100, 200] });
-// scale = min(2, max(0.5, 3)) = 2 → 1200×800
-t('小图：放大 2 倍到 1200×800', stubCv.width === 1200 && stubCv.height === 800, [stubCv.width, stubCv.height]);
-t('小图：xs 按 2 倍换算', sc2 && Math.abs(sc2.grid.xs[2] - 400) < 0.01, sc2 && sc2.grid.xs);
+// scale = min(1.6, 1500/600=2.5) = 1.6 → 960×640（放大幅度设了 1.6 倍上限，别把小图撑爆）
+t('小图：最多放大 1.6 倍到 960×640', stubCv.width === 960 && stubCv.height === 640, [stubCv.width, stubCv.height]);
+t('小图：xs 按 1.6 倍换算', sc2 && Math.abs(sc2.grid.xs[2] - 320) < 0.01, sc2 && sc2.grid.xs);
 t('网格为空时返回 null', O.stripGridLines(bigImg, null) === null);
 t('网格字段缺失不抛异常', (function () { try { O.stripGridLines(bigImg, {}); return true; } catch (e) { return false; } })());
 
@@ -173,11 +174,14 @@ if (origCreate) global.document.createElement = origCreate;
 if (!TJS) {
   console.log('\n[3]-[5] SKIP：本机没装 tesseract.js，跳过真机 OCR 部分。');
   console.log('  启用方式：cd <node 隔离工作区> && npm i --registry=https://registry.npmmirror.com tesseract.js@5.1.0');
-  console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败（OCR 真机部分已跳过）');
-  process.exit(fail ? 1 : 0);
+  aiCases().then(function () {
+    console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败（OCR 真机部分已跳过）');
+    process.exit(fail ? 1 : 0);
+  });
+  return;
 }
 
-console.log('\n[3] 识别中（首次加载 44MB 中文模型，请稍候）…');
+console.log('\n[3] 识别中（首次加载中文模型，请稍候）…');
 
 var t0 = Date.now();
 var worker = null;
@@ -291,8 +295,10 @@ TJS.createWorker('chi_sim+eng', 1, {
     courses.map(function (c) { return c.weeks && c.weeks.length; }));
   t('兜底方案也不会解出 0 门', noGrid.courses.length > 0, noGrid.courses.length);
 
-  console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
-  return worker.terminate();
+  return aiCases().then(function () {
+    console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
+    return worker.terminate();
+  });
 }).then(function () {
   process.exit(fail ? 1 : 0);
 }).catch(function (e) {
@@ -300,3 +306,184 @@ TJS.createWorker('chi_sim+eng', 1, {
   if (worker) { try { worker.terminate(); } catch (x) { } }
   process.exit(1);
 });
+
+/* ================= [6] AI 识别（云端视觉大模型）返回解析 =================
+   把 Bridge.http 换成桩，喂进各种真实会遇到的返回形态。
+   重点是用户遇到的那个网关错误：{"code":50507,"message":"Request failed: Unknown error","data":null}
+   —— 它藏在 HTTP 200 里，旧代码只会甩一句「模型没有返回内容」，看不出所以然。 */
+function aiCases() {
+  var origImage = global.Image;
+  // compress() 里会 new Image()，Node 没有：给个立刻 onload 的空壳，让图片压缩直接跳过
+  global.Image = function () {
+    var self = this;
+    self.width = 100; self.height = 100;
+    self.naturalWidth = 100; self.naturalHeight = 100;
+    Object.defineProperty(self, 'src', {
+      set: function () { setTimeout(function () { if (self.onload) self.onload(); }, 0); },
+      get: function () { return ''; }
+    });
+  };
+
+  var origHttp = global.Bridge.http;
+  function ok(payload, status) {
+    global.Bridge.http = function () {
+      return Promise.resolve({
+        status: status || 200,
+        headers: { 'content-type': 'application/json' },
+        data: typeof payload === 'string' ? payload : JSON.stringify(payload),
+        url: ''
+      });
+    };
+  }
+  function restore() {
+    global.Bridge.http = origHttp;
+    if (origImage) global.Image = origImage; else delete global.Image;
+  }
+
+  var CFG = { base: 'https://gw.example.com/v1', key: 'k', model: 'gpt-4o-mini' };
+  var IMG = 'data:image/jpeg;base64,AAAA';
+  var LIST = [
+    { name: '高等数学', teacher: '张三', place: 'A101', day: 1, start: 1, end: 2, weeks: '1-16' },
+    { name: '大学英语', place: 'B202', day: 2, start: 3, end: 4, weeks: '1-16周(双)' }
+  ];
+  var openai = function (content) {
+    return { choices: [{ message: { content: content } }] };
+  };
+
+  var cases = [];
+
+  console.log('\n[6] AI 识别（视觉大模型）返回解析');
+
+  cases.push(function () {
+    ok(openai(JSON.stringify(LIST)));
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('标准 OpenAI 返回解出 2 门课', r.courses.length === 2, r.courses.length);
+      t('字段落位正确', r.courses[0].name === '高等数学' && r.courses[0].day === 1 && r.courses[0].place === 'A101',
+        r.courses[0]);
+      t('「1-16周(双)」认成双周且展开 8 周', r.courses[1].parity === 2 && r.courses[1].weeks.length === 8,
+        [r.courses[1].parity, r.courses[1].weeks.length]);
+    });
+  });
+
+  cases.push(function () {
+    // ★ 用户实际遇到的那个错误
+    ok({ code: 50507, message: 'Request failed: Unknown error', data: null });
+    return O.runLlm(IMG, CFG, null, 20).then(function () {
+      t('★ 网关 50507 必须报错，不能静默', false, '居然成功返回了');
+    }, function (e) {
+      var m = String(e.message);
+      t('★ 错误里带上服务端原话', m.indexOf('50507') >= 0 && m.indexOf('Request failed') >= 0, m.slice(0, 180));
+      t('★ 并给出排查方向', /测试连接|模型名|不支持图片|余额|网关/.test(m), m.slice(0, 240));
+    });
+  });
+
+  cases.push(function () {
+    ok({ code: 0, message: 'ok', data: openai(JSON.stringify(LIST)) });
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('网关套一层 data 也能解析', r.courses.length === 2, r.courses.length);
+    });
+  });
+
+  cases.push(function () {
+    ok({ code: 0, data: LIST });
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('data 直接是课程数组也能解析', r.courses.length === 2, r.courses.length);
+    });
+  });
+
+  cases.push(function () {
+    ok({ content: [{ type: 'text', text: JSON.stringify([LIST[0]]) }] });
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('Anthropic 风格 content[] 也能解析', r.courses.length === 1, r.courses.length);
+    });
+  });
+
+  cases.push(function () {
+    ok(openai('```json\n' + JSON.stringify([LIST[0]]) + '\n```'));
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('带 ```json 代码块也能解析', r.courses.length === 1, r.courses.length);
+    });
+  });
+
+  cases.push(function () {
+    ok(openai(JSON.stringify({ courses: [LIST[0]] })));
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('返回 {courses:[...]} 也能解析', r.courses.length === 1, r.courses.length);
+    });
+  });
+
+  cases.push(function () {
+    ok({ error: { message: 'Incorrect API key provided' } }, 401);
+    return O.runLlm(IMG, CFG, null, 20).then(function () {
+      t('HTTP 401 必须报错', false);
+    }, function (e) {
+      t('HTTP 401 报错并带出原文', /401/.test(e.message) && /Incorrect API key/.test(e.message),
+        e.message.slice(0, 180));
+    });
+  });
+
+  cases.push(function () {
+    ok(openai('抱歉，我无法识别这张图片'));
+    return O.runLlm(IMG, CFG, null, 20).then(function () {
+      t('模型答非所问时要报错', false);
+    }, function (e) {
+      t('非 JSON 返回给出明确错误', /不是课程数组/.test(e.message), e.message.slice(0, 140));
+    });
+  });
+
+  cases.push(function () {
+    // 网络层错误应重试一次：第一次失败、第二次成功
+    var n = 0;
+    global.Bridge.http = function () {
+      n++;
+      if (n === 1) return Promise.reject(new Error('请求超时'));
+      return Promise.resolve({ status: 200, headers: {}, data: JSON.stringify(openai(JSON.stringify([LIST[0]]))), url: '' });
+    };
+    return O.runLlm(IMG, CFG, null, 20).then(function (r) {
+      t('网络错误自动重试一次', n === 2 && r.courses.length === 1, [n, r.courses.length]);
+    });
+  });
+
+  cases.push(function () {
+    ok(openai('ok'));
+    return O.testApi(CFG).then(function (r) {
+      t('测试连接：正常时返回文本', !!r.text && r.status === 200, r);
+    });
+  });
+
+  cases.push(function () {
+    ok({ code: 50507, message: 'Request failed: Unknown error', data: null });
+    return O.testApi(CFG).then(function () {
+      t('测试连接：网关错误时应报错', false);
+    }, function (e) {
+      t('测试连接：把网关错误原样摆出来', /50507/.test(e.message), e.message.slice(0, 180));
+    });
+  });
+
+  cases.push(function () {
+    t('chatUrl 补上 /chat/completions',
+      O.chatUrl('https://api.openai.com/v1') === 'https://api.openai.com/v1/chat/completions',
+      O.chatUrl('https://api.openai.com/v1'));
+    t('chatUrl 不重复拼接',
+      O.chatUrl('https://x.com/v1/chat/completions') === 'https://x.com/v1/chat/completions',
+      O.chatUrl('https://x.com/v1/chat/completions'));
+    t('chatUrl 容忍结尾斜杠',
+      O.chatUrl('https://x.com/v1/') === 'https://x.com/v1/chat/completions',
+      O.chatUrl('https://x.com/v1/'));
+    return Promise.resolve();
+  });
+
+  cases.push(function () {
+    return O.runLlm(IMG, { base: '', key: '', model: '' }, null, 20).then(function () {
+      t('没填接口地址时给提示', false);
+    }, function (e) {
+      t('没填接口地址时给提示', /设置/.test(e.message), e.message);
+    });
+  });
+
+  return cases.reduce(function (p, fn) {
+    return p.then(function () { return fn(); }).catch(function (e) {
+      t('用例本身异常', false, (e && e.stack) || String(e));
+    });
+  }, Promise.resolve()).then(restore, function (e) { restore(); throw e; });
+}

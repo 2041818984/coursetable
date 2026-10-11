@@ -10,14 +10,35 @@
 
   function hasHttp() { return !!P.CapacitorHttp; }
 
+  /* 默认 60 秒。原生的 CapacitorHttp 在 Android 上默认没有超时，
+     请求发出去没人回就永远挂着——用户会以为 App 卡死了。 */
+  var DEFAULT_TIMEOUT = 60000;
+
+  function timeoutPromise(p, ms, msg) {
+    if (!ms) return p;
+    return new Promise(function (res, rej) {
+      var done = false;
+      var t = setTimeout(function () {
+        if (done) return;
+        done = true;
+        rej(new Error(msg));
+      }, ms);
+      p.then(function (v) { if (done) return; done = true; clearTimeout(t); res(v); },
+        function (e) { if (done) return; done = true; clearTimeout(t); rej(e); });
+    });
+  }
+
   /**
    * 统一 HTTP 请求。
    * 原生（APK）走 CapacitorHttp，请求由 Java 层发出，不受浏览器同源策略限制；
    * 浏览器环境退化为 fetch，跨域会失败，调用方需提示用户。
+   * opt.timeout 传 0 表示不设超时。
    * @returns Promise<{status,headers,data,url}>
    */
   function http(opt) {
     var rt = opt.responseType || 'text';
+    var to = opt.timeout === 0 ? 0 : (opt.timeout || DEFAULT_TIMEOUT);
+
     if (isNative() && hasHttp()) {
       var p = P.CapacitorHttp.request({
         url: opt.url,
@@ -26,13 +47,17 @@
         data: opt.data,
         params: opt.params,
         responseType: rt === 'blob' ? 'text' : rt,
+        connectTimeout: to || 60000,
+        readTimeout: to || 60000,
         disableRedirects: false,
         shouldEncodeUrlParams: false
-      });
-      return p.then(function (res) {
+      }).then(function (res) {
         return { status: res.status, headers: res.headers || {}, data: res.data, url: opt.url };
       });
+      return timeoutPromise(p, to ? to + 8000 : 0,
+        '请求超时：等了 ' + Math.round(to / 1000) + ' 秒没有响应。请检查网络后重试。');
     }
+
     // 浏览器回退
     var init = { method: opt.method || 'GET', headers: opt.headers || {}, credentials: 'include' };
     if (opt.data !== undefined && init.method !== 'GET') init.body = opt.data;
@@ -43,7 +68,15 @@
       }).join('&');
       url += (url.indexOf('?') >= 0 ? '&' : '?') + q;
     }
+
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null;
+    if (ctl && to) {
+      init.signal = ctl.signal;
+      timer = setTimeout(function () { ctl.abort(); }, to);
+    }
     return fetch(url, init).then(function (r) {
+      if (timer) clearTimeout(timer);
       var h = {};
       r.headers.forEach(function (v, k) { h[k] = v; });
       var bodyP = rt === 'base64' ? r.arrayBuffer().then(arrayBufferToBase64)
@@ -51,6 +84,10 @@
           : r.text();
       return bodyP.then(function (d) { return { status: r.status, headers: h, data: d, url: url }; });
     }).catch(function (e) {
+      if (timer) clearTimeout(timer);
+      if (e && e.name === 'AbortError') {
+        throw new Error('请求超时：等了 ' + Math.round(to / 1000) + ' 秒没有响应。请检查网络后重试。');
+      }
       throw new Error('浏览器环境下跨域请求被拦截（CORS）。请打包成 APK 后使用，或改用「截图识别 / 文件导入」。');
     });
   }

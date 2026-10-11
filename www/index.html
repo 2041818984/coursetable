@@ -14,23 +14,30 @@
 
 <!-- ============ 课表页 ============ -->
 <section class="page active" id="page-schedule">
-  <header class="topbar">
-    <div class="week-nav">
-      <button class="icon-btn" id="btnPrevWeek" aria-label="上一周">‹</button>
-      <button class="week-title" id="btnPickWeek">
-        <span id="weekLabel">第 1 周</span>
-        <small id="weekSub">周一</small>
+  <header class="sch-top">
+    <button class="sch-title" id="btnPickWeek">
+      <span id="weekLabel">第 1 周</span>
+      <small id="weekSub">—</small>
+    </button>
+    <div class="sch-acts">
+      <button class="ic" id="btnAdd" aria-label="添加课程" title="添加课程">
+        <svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg>
       </button>
-      <button class="icon-btn" id="btnNextWeek" aria-label="下一周">›</button>
+      <button class="ic" id="btnToday" aria-label="回到本周" title="回到本周">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 2"/></svg>
+      </button>
+      <button class="ic" id="btnShare" aria-label="导出 / 分享课表" title="导出 / 分享课表">
+        <svg viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>
+      </button>
+      <button class="ic" id="btnMore" aria-label="更多" title="更多">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+      </button>
     </div>
-    <button class="icon-btn" id="btnToday">今</button>
   </header>
 
   <div class="grid-wrap">
     <div class="grid-head">
-      <div class="corner">
-        <span id="monthLabel">10月</span>
-      </div>
+      <div class="corner"><span id="monthLabel">10月</span></div>
       <div class="dow" data-dow="1"><b>一</b><i>1</i></div>
       <div class="dow" data-dow="2"><b>二</b><i>2</i></div>
       <div class="dow" data-dow="3"><b>三</b><i>3</i></div>
@@ -124,11 +131,24 @@
     </div>
 
     <div class="card">
+      <h3 class="card-h">作息时间</h3>
+      <p class="hint" style="margin:0 0 8px">每行一节课，写成 <code>08:00-08:45</code>。课表左侧时间轴显示的就是它，按你们学校的作息改。</p>
+      <textarea id="setTimes" rows="7" spellcheck="false" placeholder="08:00-08:45"></textarea>
+      <div class="row btns" style="margin-top:8px">
+        <button class="btn block" id="btnResetTimes">恢复默认作息</button>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 class="card-h">AI 识别（图片导入用，可选）</h3>
       <label class="row"><span>接口地址</span><input type="text" id="setApiBase" placeholder="https://api.openai.com/v1"></label>
       <label class="row"><span>模型名</span><input type="text" id="setApiModel" placeholder="gpt-4o-mini"></label>
       <label class="row"><span>API Key</span><input type="password" id="setApiKey" placeholder="sk-..."></label>
-      <p class="hint">仅在你使用「AI 识别」时才会发送图片。Key 只保存在本机，不会上传到任何其他服务器。</p>
+      <p class="hint">填 OpenAI 兼容的地址即可（以 <code>/v1</code> 结尾，App 会自动接 <code>/chat/completions</code>）。Key 只保存在本机，不会上传到任何其他服务器。</p>
+      <div class="row btns" style="margin-top:6px">
+        <button class="btn block" id="btnTestApi">测试连接</button>
+      </div>
+      <pre class="log" id="apiLog"></pre>
     </div>
 
     <div class="card">
@@ -228,7 +248,9 @@
         <button class="seg-i active" data-engine="llm">AI 识别（更准）</button>
       </div>
       <div class="preview" id="imgPreview"><span>未选择图片</span></div>
+      <p class="hint" id="ocrTip">首次识别要加载中文模型（约 20MB，已随 App 打包，无需联网），大约十几秒；之后同一台手机上再识别会快很多。</p>
       <button class="btn primary block" id="btnRunOcr">开始识别</button>
+      <button class="btn block" id="btnCancelOcr" hidden>取消识别</button>
       <div class="progress" id="ocrProgress"><div class="bar" id="ocrBar"></div><span id="ocrMsg"></span></div>
       <details class="adv">
         <summary>识别出的原始文本</summary>

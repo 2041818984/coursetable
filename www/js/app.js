@@ -55,6 +55,44 @@
     return Math.min(S.settings().totalWeeks, Math.max(1, Math.floor(diff / 7) + 1));
   }
 
+  function addDays(d, n) {
+    var x = new Date(d.getTime());
+    x.setDate(x.getDate() + n);
+    return x;
+  }
+
+  /* 日期显示：本周标题下面写完整日期「2026/10/11」，其他周写范围「10/5 – 10/11」 */
+  function fmtDate(d, withYear) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return (withYear ? d.getFullYear() + '/' : '') + m + '/' + day;
+  }
+
+  /* 同一天的课按「重叠簇」分列：两门课节次撞车时并排显示，而不是互相盖住。
+     每门课被标注一个 _lane（第几列），每个簇记录总列数 lanes。 */
+  function layoutDay(list) {
+    var cs = list.slice().sort(function (a, b) {
+      return a.start - b.start || a.end - b.end;
+    });
+    var groups = [], cur = null, curEnd = 0, lanes = [];
+    cs.forEach(function (c) {
+      if (!cur || c.start >= curEnd) {          // 与当前簇不重叠 → 另起一簇
+        cur = { lanes: 0, list: [] };
+        groups.push(cur);
+        lanes = [];
+        curEnd = c.end;
+      } else if (c.end > curEnd) {
+        curEnd = c.end;
+      }
+      var li = 0;
+      while (li < lanes.length && lanes[li] >= c.start) li++;   // 找一条不冲突的列
+      lanes[li] = c.end;
+      c._lane = li;
+      if (lanes.length > cur.lanes) cur.lanes = lanes.length;
+      cur.list.push(c);
+    });
+    return groups;
+  }
+
   /* ---------------- 课表渲染 ---------------- */
   function render() {
     var st = S.settings();
@@ -63,17 +101,25 @@
     if (state.week > total) state.week = total;
 
     var days = st.showWeekend ? 7 : 5;
-    $('weekLabel').textContent = '第 ' + state.week + ' 周';
-    $('weekSub').textContent = (state.week === autoCurrentWeek() ? '本周 · ' : '') +
-      '共 ' + total + ' 周 · ' + (state.week % 2 ? '单周' : '双周');
-
     var ws = weekStartDate(state.week);
+    var isThisWeek = state.week === autoCurrentWeek();
+
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    $('weekLabel').textContent = '第 ' + state.week + ' 周' +
+      (isThisWeek ? ' 周' + DAY_CN_FULL[today.getDay()] : '');
+    // 副标题：本周显示今天，其他周显示这一周的日期范围；后面缀上单/双周
+    $('weekSub').textContent = (isThisWeek
+      ? fmtDate(today, true)
+      : fmtDate(ws) + ' – ' + fmtDate(addDays(ws, days - 1))) +
+      ' · ' + (state.week % 2 ? '单周' : '双周');
+
     $('monthLabel').textContent = (ws.getMonth() + 1) + '月';
+
     var todayStr = new Date().toDateString();
     $$('.grid-head .dow').forEach(function (el) {
       var d = +el.dataset.dow;
-      var dt = new Date(ws.getTime());
-      dt.setDate(dt.getDate() + (d - 1));
+      var dt = addDays(ws, d - 1);
       el.querySelector('i').textContent = dt.getDate();
       el.classList.toggle('today', dt.toDateString() === todayStr);
       el.style.display = d <= days ? '' : 'none';
@@ -89,11 +135,16 @@
 
     var periods = st.periods || 12;
     for (var p = 1; p <= periods; p++) {
+      var tm = S.periodTime(p);
       var pt = document.createElement('div');
       pt.className = 'pt';
-      pt.textContent = p;
       pt.style.gridColumn = '1';
-      pt.style.gridRow = p;
+      pt.style.gridRow = String(p);
+      pt.innerHTML = '<b></b><span></span><span class="e"></span>';
+      pt.querySelector('b').textContent = p;
+      var ts = pt.querySelectorAll('span');
+      ts[0].textContent = tm.start;
+      ts[1].textContent = tm.end;
       frag.appendChild(pt);
 
       for (var d2 = 1; d2 <= days; d2++) {
@@ -107,38 +158,63 @@
       }
     }
 
-    var list = S.courses().filter(function (c) {
-      return c.weeks.length === 0 || c.weeks.indexOf(state.week) >= 0;
-    });
-
-    list.forEach(function (c) {
-      if (c.day > days) return;
-      var el = document.createElement('div');
-      el.className = 'course';
-      el.style.background = c.color || S.colorFor(c.name);
-      el.style.gridColumn = String(c.day + 1);
-      el.style.gridRow = c.start + ' / span ' + Math.max(1, c.end - c.start + 1);
-      el.innerHTML = '<b></b><span></span><span></span><i></i>';
-      el.querySelector('b').textContent = c.name;
-      var sp = el.querySelectorAll('span');
-      sp[0].textContent = c.place || '';
-      sp[1].textContent = c.teacher || '';
-      var wk = el.querySelector('i');
-      var par = S.courseParity(c, total);
-      if (par) {
-        el.classList.add('has-wk');
-        wk.className = 'wk';
-        wk.textContent = par === 1 ? '单' : '双';
-        wk.title = par === 1 ? '单周课' : '双周课';
-      } else {
-        wk.remove();
-      }
-      el.dataset.id = c.id;
-      frag.appendChild(el);
-    });
+    var all = S.courses().filter(function (c) { return c.day <= days; });
+    for (var d3 = 1; d3 <= days; d3++) {
+      var dayList = all.filter(function (c) { return c.day === d3; });
+      if (!dayList.length) continue;
+      layoutDay(dayList).forEach(function (grp) {
+        grp.list.forEach(function (c) { frag.appendChild(courseEl(c, grp.lanes, total)); });
+      });
+    }
 
     body.appendChild(frag);
-    $('emptyHint').style.display = list.length ? 'none' : 'block';
+    $('emptyHint').style.display = S.courses().length ? 'none' : 'block';
+  }
+
+  /* 一门课的一张卡片。lanes = 同簇总列数，c._lane = 自己占第几列。 */
+  function courseEl(c, lanes, total) {
+    var inWeek = !c.weeks.length || c.weeks.indexOf(state.week) >= 0;
+
+    var el = document.createElement('div');
+    el.className = 'course' + (inWeek ? '' : ' off');
+    el.style.gridColumn = String(c.day + 1);
+    el.style.gridRow = c.start + ' / span ' + Math.max(1, c.end - c.start + 1);
+    var lane = c._lane || 0;
+    el.style.left = (lane / lanes * 100) + '%';
+    el.style.width = (100 / lanes) + '%';
+    el.dataset.id = c.id;
+
+    var cb = document.createElement('div');
+    cb.className = 'cb';
+    cb.style.background = c.color || S.colorFor(c.name);
+
+    var b = document.createElement('b');
+    b.textContent = c.name;
+    cb.appendChild(b);
+
+    if (c.place) {
+      var pl = document.createElement('span');
+      pl.className = 'pl';
+      pl.textContent = '@' + c.place;
+      cb.appendChild(pl);
+    }
+
+    var tag = '';
+    if (!inWeek) {
+      tag = '非本周';                       // 本周不上 → 整卡淡化
+    } else {
+      var par = S.courseParity(c, total);   // 显式单双周标记优先
+      if (par) tag = par === 1 ? '单周' : '双周';
+    }
+    if (tag) {
+      var wk = document.createElement('i');
+      wk.className = 'wk';
+      wk.textContent = tag;
+      cb.appendChild(wk);
+    }
+
+    el.appendChild(cb);
+    return el;
   }
 
   /* ---------------- 课程详情 / 编辑 ---------------- */
@@ -157,6 +233,7 @@
 
   /* ---------------- 手动添加：点选控件 ---------------- */
   var DAY_CN = ['一', '二', '三', '四', '五', '六', '日'];
+  var DAY_CN_FULL = ['日', '一', '二', '三', '四', '五', '六'];   // 索引 = getDay()
 
   function buildManualPicks() {
     var dp = $('mDayPick');
@@ -547,18 +624,34 @@
     });
   }
 
+  /* 图片识别：切换引擎时同步下面的说明文字 */
+  function syncEngineTip() {
+    $('ocrTip').innerHTML = state.engine === 'llm'
+      ? 'AI 识别会把图片发给你在「设置」里配置的模型服务，更准但需要联网和 API Key。识别不动时，先到「设置 → AI 识别 → 测试连接」看看服务端怎么回。'
+      : '首次识别要加载中文模型（约 20MB，已随 App 打包，无需联网），大约十几秒；之后同一台手机上再识别会快很多。识别过程随时可以点「取消识别」。';
+  }
+
   function runImageImport() {
     if (!state.imgDataUrl) { toast('请先选择或拍摄图片'); return; }
     var st = S.settings();
     var prog = $('ocrProgress'), bar = $('ocrBar'), msg = $('ocrMsg');
     prog.classList.add('show');
     bar.style.width = '0%'; msg.textContent = '准备中…';
-    var btn = $('btnRunOcr');
+    var btn = $('btnRunOcr'), cancelBtn = $('btnCancelOcr');
     btn.disabled = true;
+    cancelBtn.hidden = false;
+    $('ocrTip').style.display = 'none';
+    var t0 = Date.now();
 
     function onP(m, p) {
-      msg.textContent = m;
+      var sec = Math.round((Date.now() - t0) / 1000);
+      msg.textContent = m + (sec > 4 ? '（' + sec + ' 秒）' : '');
       if (p != null) bar.style.width = Math.round(p * 100) + '%';
+    }
+
+    function finish() {
+      btn.disabled = false;
+      cancelBtn.hidden = true;
     }
 
     var job = state.engine === 'llm'
@@ -566,19 +659,21 @@
       : OcrImport.runOcr(state.imgDataUrl, onP, st.totalWeeks);
 
     job.then(function (r) {
-      btn.disabled = false;
+      finish();
       bar.style.width = '100%';
       msg.textContent = '识别完成，共 ' + r.courses.length + ' 条';
       clearLog($('ocrRaw'));
       log($('ocrRaw'), r.raw || '(无文本输出)');
-      if (!r.courses.length) { toast('没识别出课程，可换「AI 识别」试试'); return; }
+      if (!r.courses.length) { toast('没识别出课程，换个方式再试'); return; }
       showConfirm(r.courses, '图片识别');
     }).catch(function (e) {
-      btn.disabled = false;
+      finish();
       prog.classList.remove('show');
-      toast(e.message);
+      $('ocrTip').style.display = '';
+      var full = e && e.message ? e.message : String(e);
+      toast(full.split('\n')[0]);          // 吐司只放第一行，完整原因在下面的日志里
       clearLog($('ocrRaw'));
-      log($('ocrRaw'), '✘ ' + e.message);
+      log($('ocrRaw'), '✘ ' + full);
     });
   }
 
@@ -597,6 +692,37 @@
     });
   }
 
+  /* ---------------- AI 接口连通性测试 ----------------
+     图片识别报错时，用户常分不清是自己配置的问题还是服务端的问题。
+     这里发一条最小请求，把服务端的原话直接摆出来。 */
+  function testApi() {
+    var el = $('apiLog');
+    clearLog(el);
+
+    var st = S.settings();
+    var base = (st.api.base || '').trim();
+    var key = (st.api.key || '').trim();
+    var model = (st.api.model || '').trim();
+    if (!base) {
+      log(el, '✘ 请先填写接口地址，例如 https://api.openai.com/v1');
+      toast('请先填写接口地址');
+      return;
+    }
+
+    log(el, '→ ' + OcrImport.chatUrl(base));
+    log(el, '→ 模型：' + (model || '(未填，按 gpt-4o-mini 请求)'));
+    log(el, '正在请求…');
+
+    OcrImport.testApi({ base: base, key: key, model: model }).then(function (r) {
+      log(el, '✔ 连接正常（HTTP ' + r.status + '）');
+      log(el, '模型回复：' + String(r.text).slice(0, 200));
+      toast('连接正常');
+    }).catch(function (e) {
+      log(el, '✘ ' + (e && e.message ? e.message : e));
+      toast('连接失败，看下面的详情');
+    });
+  }
+
   /* ---------------- 设置 ---------------- */
   function loadSettingsUI() {
     var st = S.settings();
@@ -605,6 +731,7 @@
     $('setCurrentWeek').value = autoCurrentWeek();
     $('setShowWeekend').checked = !!st.showWeekend;
     $('setPeriods').value = st.periods;
+    $('setTimes').value = (st.periodTimes && st.periodTimes.length ? st.periodTimes : S.DEFAULT_TIMES).join('\n');
     $('setApiBase').value = st.api.base || '';
     $('setApiModel').value = st.api.model || '';
     $('setApiKey').value = st.api.key || '';
@@ -647,6 +774,37 @@
         S.save();
       });
     });
+
+    // 作息时间：每行一节，写成 08:00-08:45
+    $('setTimes').addEventListener('change', function () {
+      var arr = $('setTimes').value.split('\n')
+        .map(function (s) { return s.trim(); })
+        .filter(Boolean);
+      var st = S.settings();
+      if (!arr.length) {
+        $('setTimes').value = (st.periodTimes || S.DEFAULT_TIMES).join('\n');
+        toast('至少要保留一节课的时间');
+        return;
+      }
+      if (arr.length > 24) arr = arr.slice(0, 24);
+      st.periodTimes = arr;
+      if (arr.length > st.periods) st.periods = arr.length;   // 别让时间轴比节数还长
+      S.save();
+      $('setPeriods').value = st.periods;
+      render();
+      toast('作息时间已保存');
+    });
+
+    $('btnResetTimes').addEventListener('click', function () {
+      var st = S.settings();
+      st.periodTimes = S.DEFAULT_TIMES.slice();
+      S.save();
+      loadSettingsUI();
+      render();
+      toast('已恢复默认作息');
+    });
+
+    $('btnTestApi').addEventListener('click', testApi);
 
     $('btnClear').addEventListener('click', function () {
       if (!confirm('确定清空所有课程？此操作不可撤销。')) return;
@@ -698,11 +856,17 @@
       }
     });
 
-    // 周次
-    $('btnPrevWeek').addEventListener('click', function () { state.week--; render(); });
-    $('btnNextWeek').addEventListener('click', function () { state.week++; render(); });
-    $('btnToday').addEventListener('click', function () { state.week = autoCurrentWeek(); render(); });
+    // 课表顶栏
     $('btnPickWeek').addEventListener('click', pickWeek);
+    $('btnToday').addEventListener('click', function () {
+      state.week = autoCurrentWeek();
+      render();
+      toast('已回到第 ' + state.week + ' 周');
+    });
+    $('btnAdd').addEventListener('click', function () { openManual(null, null, null); });
+    $('btnShare').addEventListener('click', shareSchedule);
+    $('btnMore').addEventListener('click', function () { goto('page-import'); });
+    bindSwipe();
 
     // 网格交互
     $('gridBody').addEventListener('click', function (e) {
@@ -785,9 +949,15 @@
         $$('#ocrEngine .seg-i').forEach(function (x) { x.classList.remove('active'); });
         b.classList.add('active');
         state.engine = b.dataset.engine;
+        syncEngineTip();
       });
     });
+    syncEngineTip();
     $('btnRunOcr').addEventListener('click', runImageImport);
+    $('btnCancelOcr').addEventListener('click', function () {
+      if (!OcrImport.cancel()) { toast('AI 请求已经发出去了，只能等它返回'); return; }
+      toast('已取消识别');
+    });
 
     // 文件
     $('btnPickFile').addEventListener('click', function () { $('fileDoc').click(); });
@@ -808,6 +978,58 @@
       if (!confirm('替换会删除现有全部课程，确定继续？')) return;
       commitPending(true);
     });
+  }
+
+  /* ---------------- 导出 / 分享 ---------------- */
+  function shareSchedule() {
+    var data = JSON.stringify(S.load(), null, 2);
+    var name = 'coursetable-' + new Date().toISOString().slice(0, 10) + '.json';
+
+    // 手机上优先走系统分享（可以直接发给微信 / 存到文件）
+    try {
+      var file = new File([data], name, { type: 'application/json' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: '我的课表' }).then(function () {
+          toast('已分享');
+        }).catch(function () { /* 用户取消，不算错 */ });
+        return;
+      }
+    } catch (e) { /* 不支持就退回下载 */ }
+
+    var blob = new Blob([data], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast('已导出课表 JSON');
+  }
+
+  /* ---------------- 左右滑动切换周 ---------------- */
+  function bindSwipe() {
+    var el = $('page-schedule');
+    var x0 = 0, y0 = 0, t0 = 0, tracking = false;
+
+    el.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      x0 = e.touches[0].clientX;
+      y0 = e.touches[0].clientY;
+      t0 = Date.now();
+      tracking = true;
+    }, { passive: true });
+
+    el.addEventListener('touchend', function (e) {
+      if (!tracking) return;
+      tracking = false;
+      if (e.target.closest('button')) return;      // 点在顶栏图标上不算滑动
+      if (Date.now() - t0 > 800) return;           // 慢动作不算
+      var t = e.changedTouches[0];
+      var dx = t.clientX - x0, dy = t.clientY - y0;
+      // 横向位移要够大、且明显大于纵向，才算切周（否则是在上下滚课表）
+      if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+      state.week += dx < 0 ? 1 : -1;
+      render();
+    }, { passive: true });
   }
 
   /* 周次快速跳转 */
@@ -860,6 +1082,12 @@
     bind();
     bindSettings();
     bindBack();
+
+    // 引擎选择以界面上高亮的那一个为准（默认 AI 识别）
+    var segActive = $('ocrEngine').querySelector('.seg-i.active');
+    if (segActive) state.engine = segActive.dataset.engine;
+    syncEngineTip();
+
     render();
 
     // 首次使用时，浏览器环境给出能力提醒

@@ -8,3 +8,4 @@ android/local.properties
 android/capacitor-cordova-android-plugins/
 *.log
 .DS_Store
+preview.html
