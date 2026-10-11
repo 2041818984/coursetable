@@ -170,7 +170,7 @@
       var dayList = all.filter(function (c) { return c.day === d3; });
       if (!dayList.length) continue;
       layoutDay(dayList).forEach(function (grp) {
-        grp.list.forEach(function (c) { frag.appendChild(courseEl(c, grp.lanes, total)); });
+        grp.list.forEach(function (c) { var el = courseEl(c, grp.lanes, total); if (el) frag.appendChild(el); });
       });
     }
 
@@ -181,6 +181,7 @@
   /* 一门课的一张卡片。lanes = 同簇总列数，c._lane = 自己占第几列。 */
   function courseEl(c, lanes, total) {
     var inWeek = !c.weeks.length || c.weeks.indexOf(state.week) >= 0;
+    if (!inWeek) return null;  // 非本周的课直接不显示
 
     var el = document.createElement('div');
     el.className = 'course' + (inWeek ? '' : ' off');
