@@ -64,7 +64,7 @@ setTimeout(() => {
   let routes = [];
   w.Bridge.http = function (opt) {
     reqLog.push({ url: opt.url, method: opt.method, data: opt.data });
-    const hit = routes.find(r => opt.url.indexOf(r.match) >= 0);
+    const hit = routes.find(r => opt.url.indexOf(r.match) >= 0 && (!r.method || r.method === opt.method));
     if (!hit) return Promise.reject(new Error('测试没有配置这个路由：' + opt.url));
     const res = Object.assign({ status: 200, headers: {} }, hit.res || {});
     return Promise.resolve(Object.assign({ url: opt.url }, res));
@@ -272,9 +272,9 @@ setTimeout(() => {
     resetLog();
     $('jwBase').value = 'http://zfjw.hntou.edu.cn';
     $('jwGetCode').click();                 // 这会传一个 Event 进去
-    // 请求之间有 400ms 节流（该校服务器连发会不响应），prepare 要发 2 个请求，
-    // 所以这里等够 2 秒再看结果。
-    await new Promise(res => setTimeout(res, 2000));
+    // 请求之间有 THROTTLE_MS 节流（该校服务器连发会不响应、登录口还会按 IP 限流），
+    // prepare 要发 2 个请求，所以这里等够 3.5 秒再看结果。
+    await new Promise(res => setTimeout(res, 3500));
     t('点「①」不会误取验证码（Event 没被当成 forceCode）',
       !urls().some(u => /kaptcha/.test(u)), urls());
     t('点「①」后按钮文案已复位', /①/.test($('jwGetCode').textContent), $('jwGetCode').textContent);
@@ -285,6 +285,177 @@ setTimeout(() => {
     $('jwFillSchool').click();
     t('一键填入本校地址', $('jwBase').value === 'http://zfjw.hntou.edu.cn', $('jwBase').value);
     t('填入后版本选到 jwglxt', $('jwVariant').value === 'jwglxt', $('jwVariant').value);
+
+    /* ---------- [16] 周次解析：正方真实写法 ----------
+       数据来源：用真实账号 2025000001 在 zfjw.hntou.edu.cn 实抓到的 kbList。
+       这批断言对应两个曾经真实存在的 bug：
+         ① "2-16周(双)" 只认到 "2-16周" 就把单双周丢了 → 单双周课被当成每周都上；
+         ② "5-8周,10-13周" 只取到前半段。 */
+    console.log('\n[16] 周次解析：正方真实写法（单双周 / 多段）');
+    const P = w.Parser;
+    const ev = (s) => P.extractWeeks(s, 20);
+
+    let r1 = ev('2-16周(双)');
+    t('2-16周(双) → 认出双周', r1.parity === 2, r1);
+    t('2-16周(双) → 周次是 2,4,…,16', r1.weeks.join(',') === '2,4,6,8,10,12,14,16', r1.weeks);
+
+    let r2 = ev('1-15周(单)');
+    t('1-15周(单) → 认出单周', r2.parity === 1, r2);
+    t('1-15周(单) → 周次是 1,3,…,15', r2.weeks.join(',') === '1,3,5,7,9,11,13,15', r2.weeks);
+
+    let r3 = ev('5-8周,10-13周');
+    t('多段周次不会丢后半段', r3.weeks.join(',') === '5,6,7,8,10,11,12,13', r3.weeks);
+    t('多段周次不带单双标记', r3.parity === 0, r3.parity);
+
+    let r4 = ev('1-17周');
+    t('1-17周 → 17 周且不是单双周', r4.weeks.length === 17 && r4.parity === 0, r4);
+
+    t('「单周」→ parity=1', ev('单周').parity === 1);
+    t('「双周」→ parity=2', ev('双周').parity === 2);
+    t('「(单)」也认', P.parityOf('1-16周(单)') === 1, P.parityOf('1-16周(单)'));
+    t('「（双）」全角括号也认', P.parityOf('2-18周（双）') === 2, P.parityOf('2-18周（双）'));
+    t('普通周次不会误判成单双周', P.parityOf('1-16周') === 0);
+
+    /* ---------- [17] 真实课表 JSON 全量解析 ---------- */
+    console.log('\n[17] 真实课表 JSON（21 条，实抓）解析');
+    const REAL_KB = JSON.parse(fs.readFileSync(path.join(root, 'scripts/fixtures/hntou-kb.json'), 'utf8'));
+    const parsed = P.parseJwList(REAL_KB.kbList, 20);
+    t('21 条原始记录全部解析出来', parsed.length === 21, parsed.length);
+    t('学生信息里带班级', REAL_KB.xsxx.BJMC === '25海洋技术1班', REAL_KB.xsxx.BJMC);
+
+    const byName = (n) => parsed.filter(c => c.name === n);
+    const phys = byName('大学物理A-2').filter(c => c.day === 1)[0];
+    t('周一「大学物理A-2」是双周课', phys && phys.parity === 2, phys && phys.parity);
+    t('周一「大学物理A-2」周次 = 2,4,…,16',
+      phys && phys.weeks.join(',') === '2,4,6,8,10,12,14,16', phys && phys.weeks);
+
+    const sing = parsed.filter(c => c.parity === 1);
+    t('解析出 2 门单周课', sing.length === 2, sing.map(c => c.name));
+    const double = parsed.filter(c => c.parity === 2);
+    t('解析出 2 门双周课', double.length === 2, double.map(c => c.name));
+
+    const multi = parsed.filter(c => c.weeks.join(',') === '5,6,7,8,10,11,12,13');
+    t('「5-8周,10-13周」那门课解析完整', multi.length === 1, parsed.map(c => c.weeks.join(',')));
+
+    // 注意「线性代数」有两门：周一 1-17 周（普通），周三 2-16周(双)
+    const linDouble = parsed.filter(c => c.name === '线性代数').find(c => c.parity === 2);
+    t('周三「线性代数」是双周课', linDouble && linDouble.day === 3, linDouble && linDouble.day);
+    t('单双周经 Store.formatWeeks 显示为「双周」',
+      w.Store.formatWeeks(linDouble.weeks, 20, linDouble.parity) === '双周',
+      w.Store.formatWeeks(linDouble.weeks, 20, linDouble.parity));
+    t('同为「线性代数」的周一那门仍是普通周次（1-17）',
+      w.Store.formatWeeks(parsed.filter(c => c.name === '线性代数' && c.day === 1)[0].weeks, 20, 0) === '1-17',
+      w.Store.formatWeeks(parsed.filter(c => c.name === '线性代数' && c.day === 1)[0].weeks, 20, 0));
+    const dan = parsed.filter(c => c.parity === 1)[0];
+    t('单周课显示为「单周」',
+      w.Store.formatWeeks(dan.weeks, 20, dan.parity) === '单周',
+      w.Store.formatWeeks(dan.weeks, 20, dan.parity));
+    t('节次解析正确（1-2节）', phys && phys.start === 1 && phys.end === 2, [phys && phys.start, phys && phys.end]);
+    t('地点解析正确', phys && phys.place === '3301', phys && phys.place);
+    t('教师解析正确', phys && /程然/.test(phys.teacher), phys && phys.teacher);
+
+    /* ---------- [18] 课表页面下拉框 → 学年/学期 ---------- */
+    console.log('\n[18] 从课表页面读学年/学期（xnm / xqm）');
+    const KB_PAGE = fs.readFileSync(path.join(root, 'scripts/fixtures/hntou-kbpage.html'), 'utf8');
+    const sel = J.parseSelects(KB_PAGE);
+    t('解析出 #xnm 下拉框', !!sel.xnm && sel.xnm.length > 10, sel.xnm && sel.xnm.length);
+    t('#xnm 选中项是 2026', J.pickSelected(sel.xnm) === '2026', J.pickSelected(sel.xnm));
+    t('#xnm 文本是「2026-2027」', /2026-2027/.test((sel.xnm.find(o => o.value === '2026') || {}).text || ''), sel.xnm.find(o => o.value === '2026'));
+    t('#xqm 选中项是 3（第 1 学期）', J.pickSelected(sel.xqm) === '3', J.pickSelected(sel.xqm));
+    t('#xqm 的取值是 3/12/16 而不是 1/2/3',
+      sel.xqm.map(o => o.value).filter(Boolean).join(',') === '3,12,16',
+      sel.xqm.map(o => o.value));
+
+    t('guessTerm 秋季 → 当年 + 第 1 学期',
+      J.guessTerm(new Date('2026-10-11')).xnm === '2026' && J.guessTerm(new Date('2026-10-11')).xqm === '3',
+      J.guessTerm(new Date('2026-10-11')));
+    t('guessTerm 春季 → 上一年 + 第 2 学期',
+      J.guessTerm(new Date('2026-04-01')).xnm === '2025' && J.guessTerm(new Date('2026-04-01')).xqm === '12',
+      J.guessTerm(new Date('2026-04-01')));
+
+    routes = [
+      { match: 'xskbcx_cxXskbcxIndex.html', res: { data: KB_PAGE } }
+    ];
+    resetLog();
+    const term = await J.resolveTerm({ base: 'http://zfjw.hntou.edu.cn', variant: 'jwglxt' }, () => {}, {});
+    t('resolveTerm 从页面读到 xnm=2026', term.xnm === '2026', term);
+    t('resolveTerm 从页面读到 xqm=3', term.xqm === '3', term);
+    t('term.source 标记为 page', term.source === 'page', term.source);
+
+    const term2 = await J.resolveTerm({ base: 'http://zfjw.hntou.edu.cn', variant: 'jwglxt' }, () => {},
+      { xnm: '2025', xqm: '12' });
+    t('界面上填了就用填的（用户覆盖）', term2.source === 'manual' && term2.xnm === '2025', term2);
+
+    routes = [{ match: '/jwglxt/', res: { status: 901, data: '' } }];
+    const term3 = await J.resolveTerm({ base: 'http://zfjw.hntou.edu.cn', variant: 'jwglxt' }, () => {}, {});
+    t('页面读不到时退回按日期推算', term3.source === 'guess', term3);
+
+    /* ---------- [19] 端到端：登录 → 自动定学期 → 抓课表 ---------- */
+    console.log('\n[19] 端到端：登录 → 自动识别学期 → 抓课表（真实响应）');
+    routes = [
+      { match: 'login_getPublicKey.html', res: { data: PUBKEY } },
+      { match: 'xskbcx_cxXskbcxIndex.html', res: { data: KB_PAGE } },
+      { match: 'xskbcx_cxXsgrkb.html', res: { data: JSON.stringify(REAL_KB), headers: { 'Content-Type': 'application/json' } } },
+      { match: 'login_slogin.html', method: 'GET', res: { data: REAL } },
+      { match: 'login_slogin.html', method: 'POST', res: { status: 302, headers: { Location: '/jwglxt/xtgl/index_initMenu.html' }, data: '' } }
+    ];
+    resetLog();
+    const ctx2 = await J.prepare('http://zfjw.hntou.edu.cn', 'jwglxt', () => {});
+    const out = await J.run(ctx2, {
+      user: '2025000001', pass: 'x', code: '', rsaMode: 'pkcs1', totalWeeks: 20, log: () => {}
+    });
+
+    const kbReq2 = reqLog.find(r => /xskbcx_cxXsgrkb/.test(r.url));
+    t('课表请求打到了 xskbcx_cxXsgrkb.html', !!kbReq2, urls());
+    t('课表请求带了 gnmkdm=N2151', /gnmkdm=N2151/.test(kbReq2.url), kbReq2.url);
+    t('★ 课表请求带上了真实 xnm=2026', /xnm=2026/.test(kbReq2.data), kbReq2.data);
+    t('★ 课表请求带上了真实 xqm=3', /xqm=3/.test(kbReq2.data), kbReq2.data);
+    t('★ 课表请求带了 kzlx=ck', /kzlx=ck/.test(kbReq2.data), kbReq2.data);
+
+    t('抓取前先打开了课表页读学期', urls().some(u => /xskbcx_cxXskbcxIndex/.test(u)), urls());
+    t('端到端解析出 21 门课', out.courses.length === 21, out.courses.length);
+    t('返回值带回识别到的学期', out.term && out.term.xnm === '2026' && out.term.xqm === '3', out.term);
+    t('端到端结果里单双周没丢',
+      out.courses.filter(c => c.parity === 2).length === 2 &&
+      out.courses.filter(c => c.parity === 1).length === 2,
+      out.courses.filter(c => c.parity).map(c => [c.name, c.parity]));
+
+    /* 服务器对「学期不对」的响应是字面量 null，不能当成「接口不存在」 */
+    routes = [
+      { match: 'login_getPublicKey.html', res: { data: PUBKEY } },
+      { match: 'xskbcx_cxXskbcxIndex.html', res: { data: KB_PAGE } },
+      { match: 'xskbcx_cxXsgrkb.html', res: { data: 'null' } },
+      { match: 'login_slogin.html', method: 'GET', res: { data: REAL } },
+      { match: 'login_slogin.html', method: 'POST', res: { status: 302, headers: { Location: '/jwglxt/xtgl/index_initMenu.html' }, data: '' } }
+    ];
+    resetLog();
+    const ctx3 = await J.prepare('http://zfjw.hntou.edu.cn', 'jwglxt', () => {});
+    let err3 = null;
+    try { await J.run(ctx3, { user: '2025000001', pass: 'x', code: '', totalWeeks: 20, log: () => {} }); }
+    catch (e) { err3 = e; }
+    t('全部返回 null 时给出可操作错误而不是静默成功', !!err3, err3 && err3.message);
+    t('错误信息引导改用 PDF / 图片导入', !!err3 && /PDF|图片/.test(err3.message), err3 && err3.message);
+
+    /* ---------- [20] Store 保留单双周标记 ---------- */
+    console.log('\n[20] Store 保存/展示保留单双周');
+    const S2 = w.Store;
+    S2.replaceAll([
+      { name: '双周课', day: 1, start: 1, end: 2, weeks: [2, 4, 6, 8], parity: 2 },
+      { name: '单周课', day: 2, start: 3, end: 4, weeks: [1, 3, 5, 7], parity: 1 },
+      { name: '普通课', day: 3, start: 5, end: 6, weeks: '1-16', parity: 0 }
+    ]);
+    const saved = S2.courses();
+    t('parity=2 存得住', saved[0].parity === 2, saved[0]);
+    t('parity=1 存得住', saved[1].parity === 1, saved[1]);
+    t('双周课展示为「双周」', S2.formatWeeks(saved[0].weeks, 20, saved[0].parity) === '双周');
+    t('单周课展示为「单周」', S2.formatWeeks(saved[1].weeks, 20, saved[1].parity) === '单周');
+    t('courseParity 优先用显式标记', S2.courseParity(saved[0], 20) === 2);
+    t('普通课不是单双周', S2.courseParity(saved[2], 20) === 0);
+    // 手填周次串写「单双周」时也要被记住
+    const manual = S2.add({ name: '手填单周', day: 4, start: 1, end: 2, weeks: '单周' });
+    t('手填「单周」→ parity=1', manual.parity === 1, manual);
+    t('手填「单周」→ 周次展开为奇数周', manual.weeks.every(x => x % 2 === 1) && manual.weeks.length > 1, manual.weeks);
+    S2.clear();
 
     console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
     process.exit(fail ? 1 : 0);

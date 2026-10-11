@@ -38,29 +38,79 @@
   /* ============ 周次 / 节次 / 地点 / 教师的正则识别 ============ */
 
   // 周次：1-16周 / 第1-16周 / [1-16] / (1-16) / 1,3,5周 / 单周 / 双周
+  /* 单双周标记：1=单周，2=双周，0=不分单双。
+     正方教务把单双写在小括号里，形如 "2-16周(双)"、"1-15周(单)"，
+     所以不能只认「单周 / 双周」这两个词。 */
+  function parityOf(text) {
+    var t = trim(text);
+    if (/单\s*周|[（(【\[]\s*单\s*[)）】\]]|奇数周/.test(t)) return 1;
+    if (/双\s*周|[（(【\[]\s*双\s*[)）】\]]|偶数周/.test(t)) return 2;
+    return 0;
+  }
+
+  function filterParity(arr, parity) {
+    if (!parity) return arr;
+    var wantEven = (parity === 2);
+    return arr.filter(function (w) { return (w % 2 === 0) === wantEven; });
+  }
+
+  /**
+   * 解析周次文本。返回 {weeks:[...], raw:'原文', parity:0|1|2}
+   *
+   * 真实数据里踩过的两个坑（海南热带海洋学院 2026-2027 实抓）：
+   *   ① "2-16周(双)" —— 旧的实现只认到 "2-16周" 就返回，把单双周直接丢了，
+   *      于是单周课/双周课被当成每周都上。现在必须带上 parity。
+   *   ② "5-8周,10-13周" —— 多段周次的第二段会被整段吞掉，只剩 5-8 周。
+   *      现在按「带周字的数字段」全局扫描并取并集。
+   */
   function extractWeeks(text, totalWeeks) {
     totalWeeks = totalWeeks || 20;
-    var t = trim(text);
-    var res = { weeks: [], raw: '' };
+    var t = trim(text == null ? '' : String(text));
+    var res = { weeks: [], raw: '', parity: 0 };
+    if (!t) return res;
 
-    var m = t.match(/第?\s*(\d{1,2})\s*[-~—－]\s*(\d{1,2})\s*周/);
-    if (m) { res.raw = m[0]; res.weeks = range(+m[1], +m[2]); return res; }
+    res.parity = parityOf(t);
 
-    m = t.match(/\[\s*(\d{1,2})\s*[-~—]\s*(\d{1,2})\s*\]/);
-    if (m) { res.raw = m[0]; res.weeks = range(+m[1], +m[2]); return res; }
+    // 全局扫描所有「数字段 + 周」：1-17周 / 第3周 / 1,3,5周 / 5-8周,10-13周
+    var collected = [], rawParts = [];
+    var segRe = /(\d{1,2}(?:\s*[-~—－至到]\s*\d{1,2})?(?:\s*[，,、]\s*\d{1,2}(?:\s*[-~—－至到]\s*\d{1,2})?)*)\s*周(?![节次])/g;
+    var m;
+    while ((m = segRe.exec(t))) {
+      rawParts.push(m[0]);
+      m[1].split(/[，,、]+/).forEach(function (piece) {
+        var pm = piece.match(/^\s*(\d{1,2})\s*[-~—－至到]\s*(\d{1,2})\s*$/);
+        if (pm) {
+          range(+pm[1], +pm[2]).forEach(function (w) { collected.push(w); });
+          return;
+        }
+        var nm = piece.match(/\d{1,2}/);
+        if (nm) collected.push(+nm[0]);
+      });
+    }
 
-    m = t.match(/[（(]\s*(\d{1,2})\s*[-~—]\s*(\d{1,2})\s*[)）]\s*周?/);
-    if (m) { res.raw = m[0]; res.weeks = range(+m[1], +m[2]); return res; }
-
-    m = t.match(/(\d{1,2}(?:\s*[，,、]\s*\d{1,2}){0,20})\s*周(?![节次])/);
-    if (m) {
-      res.raw = m[0];
-      res.weeks = m[1].split(/[，,、\s]+/).map(Number).filter(function (n) { return n > 0; });
+    if (collected.length) {
+      var seen = {}, uniq = [];
+      collected.forEach(function (w) {
+        if (w >= 1 && w <= 200 && !seen[w]) { seen[w] = 1; uniq.push(w); }
+      });
+      uniq.sort(function (a, b) { return a - b; });
+      res.raw = rawParts.join(',');
+      var filtered = filterParity(uniq, res.parity);
+      // 数据异常（比如单双周标记与区间全不匹配）时退回不过滤，别把课弄没了
+      if (filtered.length) res.weeks = filtered;
+      else { res.weeks = uniq; res.parity = 0; }
       return res;
     }
 
-    if (/单周/.test(t)) { res.raw = '单周'; res.weeks = oddEven(1, totalWeeks); return res; }
-    if (/双周/.test(t)) { res.raw = '双周'; res.weeks = oddEven(0, totalWeeks); return res; }
+    // 没有「N周」这种写法时的几种兜底
+    m = t.match(/\[\s*(\d{1,2})\s*[-~—－]\s*(\d{1,2})\s*\]/);
+    if (m) { res.raw = m[0]; res.weeks = filterParity(range(+m[1], +m[2]), res.parity); return res; }
+
+    m = t.match(/[（(]\s*(\d{1,2})\s*[-~—－]\s*(\d{1,2})\s*[)）]/);
+    if (m) { res.raw = m[0]; res.weeks = filterParity(range(+m[1], +m[2]), res.parity); return res; }
+
+    if (res.parity === 1) { res.raw = '单周'; res.weeks = oddEven(1, totalWeeks); return res; }
+    if (res.parity === 2) { res.raw = '双周'; res.weeks = oddEven(0, totalWeeks); return res; }
     if (/全\s*周|每\s*周/.test(t)) { res.raw = '全周'; res.weeks = range(1, totalWeeks); return res; }
     return res;
   }
@@ -362,7 +412,9 @@
       var per = extractPeriods(jcRaw) ||
         (jcRaw.match(/(\d{1,2})/) ? { start: +RegExp.$1, end: (jcRaw.match(/(\d{1,2})\D+(\d{1,2})/) ? +RegExp.$2 : +RegExp.$1) } : null);
 
-      var weeks = extractWeeks(zcd, totalWeeks).weeks;
+      var ex = extractWeeks(zcd, totalWeeks);
+      var weeks = ex.weeks;
+      var parity = ex.parity || 0;
       if (!weeks.length) {
         // "1111111111111111000000000000000000000000000" 这类按位表示
         if (/^[01]+$/.test(zcd) && zcd.length > 4) {
@@ -377,7 +429,12 @@
         day: day,
         start: per ? per.start : 1,
         end: per ? per.end : 1,
-        weeks: weeks
+        weeks: weeks,
+        // 单双周：1=单周 2=双周 0=不分。正方在 zcd 里明确写了 "(单)/(双)"，
+        // 直接采信它，别靠「周次集合是否等于完整奇/偶周」去猜——那个推断依赖
+        // 学期总周数，而总周数各校不同，真实数据里必然猜错。
+        parity: parity,
+        zcd: zcd
       });
     });
     return out;
@@ -678,6 +735,8 @@
     tighten: tighten,
     glueCjkWords: glueCjkWords,
     extractWeeks: extractWeeks,
+    parityOf: parityOf,
+    filterParity: filterParity,
     extractPeriods: extractPeriods,
     extractTimePeriods: extractTimePeriods,
     DEFAULT_TIME: DEFAULT_TIME

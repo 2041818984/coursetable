@@ -124,7 +124,7 @@
       sp[0].textContent = c.place || '';
       sp[1].textContent = c.teacher || '';
       var wk = el.querySelector('i');
-      var par = S.weekParity(c.weeks, total);
+      var par = S.courseParity(c, total);
       if (par) {
         el.classList.add('has-wk');
         wk.className = 'wk';
@@ -151,7 +151,7 @@
       '教师：' + (c.teacher || '—') + '<br>' +
       '地点：' + (c.place || '—') + '<br>' +
       '时间：周' + '一二三四五六日'.charAt(c.day - 1) + ' 第 ' + c.start + '-' + c.end + ' 节<br>' +
-      '周次：' + (S.formatWeeks(c.weeks, S.settings().totalWeeks) || '全部');
+      '周次：' + (S.formatWeeks(c.weeks, S.settings().totalWeeks, c.parity) || '全部');
     openSheet('sheet-detail');
   }
 
@@ -231,7 +231,8 @@
     var name = $('mName').value.trim();
     if (!name) { toast('请填写课程名'); $('mName').focus(); return false; }
     var total = S.settings().totalWeeks || 20;
-    var weeks = S.parseWeeks($('mWeeks').value, total);
+    var weeksText = $('mWeeks').value;
+    var weeks = S.parseWeeks(weeksText, total);
     if (!weeks.length) weeks = S.parseWeeks('1-' + total, total);
     var s = +$('mStart').value || 1;
     var patch = {
@@ -241,7 +242,10 @@
       day: +$('mDay').value || 1,
       start: s,
       end: Math.max(s, +$('mEnd').value || s),
-      weeks: weeks
+      weeks: weeks,
+      // 用户在周次里写了「单周 / 双周」（或点了对应快捷键）就记住，
+      // 否则 normalize 只看到数组，会把单双周标记丢掉
+      parity: /单\s*周/.test(weeksText) ? 1 : (/双\s*周/.test(weeksText) ? 2 : 0)
     };
     if (state.editingId) S.update(state.editingId, patch);
     else S.add(patch);
@@ -274,7 +278,7 @@
     $('mDay').value = c ? c.day : (day || 1);
     $('mStart').value = c ? c.start : (period || 1);
     $('mEnd').value = c ? c.end : (period || 1);
-    $('mWeeks').value = c ? S.formatWeeks(c.weeks, S.settings().totalWeeks) : ('1-' + (S.settings().totalWeeks || 20));
+    $('mWeeks').value = c ? S.formatWeeks(c.weeks, S.settings().totalWeeks, c.parity) : ('1-' + (S.settings().totalWeeks || 20));
     $('mDelete').hidden = !c;
     $('mSaveNext').hidden = !!c;
     state.mpick = { anchor: null };
@@ -291,7 +295,9 @@
         checked: true,
         name: c.name, teacher: c.teacher || '', place: c.place || '',
         day: c.day, start: c.start, end: c.end,
-        weeks: c.weeks && c.weeks.length ? c.weeks : [1]
+        weeks: c.weeks && c.weeks.length ? c.weeks : [1],
+        // 单双周标记必须一起带过去，否则确认页和手改周次后角标会丢
+        parity: c.parity || 0
       };
     });
     $('cfTitle').textContent = (title || '确认课程') + '（' + state.pending.length + ' 门）';
@@ -324,7 +330,7 @@
       badge.textContent = '周' + dowTxt.charAt(c.day - 1) + ' ' + c.start + '-' + c.end + '节';
       main.appendChild(badge);
 
-      var wt = S.formatWeeks(c.weeks, S.settings().totalWeeks);
+      var wt = S.formatWeeks(c.weeks, S.settings().totalWeeks, c.parity);
       if (wt && !/周$/.test(wt)) wt += '周';   // 「单周」「双周」本身已带周字，别再加
       var p = document.createElement('p');
       p.textContent = [c.teacher, c.place, wt].filter(Boolean).join(' · ');
@@ -341,9 +347,14 @@
 
       var wp = document.createElement('input');
       wp.className = 'editable';
-      wp.value = S.formatWeeks(c.weeks, S.settings().totalWeeks);
-      wp.placeholder = '周次，如 1-16';
-      wp.oninput = function () { c.weeks = S.parseWeeks(wp.value, S.settings().totalWeeks); };
+      wp.value = S.formatWeeks(c.weeks, S.settings().totalWeeks, c.parity);
+      wp.placeholder = '周次，如 1-16 或 单周 / 双周';
+      wp.oninput = function () {
+        c.weeks = S.parseWeeks(wp.value, S.settings().totalWeeks);
+        // 手改了周次串，单双周标记要跟着改，否则角标会和周次对不上
+        c.parity = S.weekParity(c.weeks, S.settings().totalWeeks) ||
+          (/单\s*周/.test(wp.value) ? 1 : (/双\s*周/.test(wp.value) ? 2 : 0));
+      };
       main.appendChild(wp);
 
       el.appendChild(main);
@@ -473,12 +484,21 @@
 
     JwImport.run(state.jwCtx, {
       user: user, pass: pass, code: code,
-      xnm: $('jwXnm').value.trim(), xqm: $('jwXqm').value,
+      // 留空时由 App 自己打开课表页读「当前学年 / 学期」，一般不用填
+      xnm: $('jwXnm').value.trim(), xqm: $('jwXnm').value.trim() ? $('jwXqm').value : '',
       rsaMode: 'pkcs1',
       totalWeeks: st.totalWeeks || 20,
       log: function (m) { log($('jwLog'), m); }
     }).then(function (r) {
       btn.disabled = false; btn.textContent = '② 登录并抓取';
+      // 把服务器认可的学年/学期回填，下次直接复用
+      if (r.term) {
+        $('jwXnm').value = r.term.xnm || '';
+        $('jwXqm').value = r.term.xqm || '3';
+        st.jw.xnm = r.term.xnm || '';
+        st.jw.xqm = r.term.xqm || '3';
+        S.save();
+      }
       jwReset();
       showConfirm(r.courses, '教务导入');
     }).catch(function (e) {

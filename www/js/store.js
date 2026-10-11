@@ -118,7 +118,13 @@
      必须给 total 才敢下结论：没有总周数时无从判断 1,3,5 是「单周」
      还是「这门课只上前三周」，宁可退回数字串也不要说错。
      另外要求它正好等于该学期奇（偶）数周的完整集合，
-     所以「1,3,5,7」在 20 周的学期里不会被误标成单周。 */
+     所以「1,3,5,7」在 20 周的学期里不会被误标成单周。
+
+     注意：这个函数只用于「没有原始单双周标记」的场合（OCR / PDF 导入）。
+     教务直连拿到的课程自带 parity 字段（正方 zcd 里写明 (单)/(双)），
+     那种情况直接用 parity，不要走这里的推断——推断依赖学期总周数，
+     而真实学期往往是 17 周、20 周不等，硬猜必然出错。
+     判断某门课的单双周请统一调 courseParity()。 */
   function weekParity(arr, total) {
     if (!arr || !total || arr.length < 2) return 0;
     var s = arr.slice().sort(function (a, b) { return a - b; });
@@ -134,9 +140,20 @@
     return par;
   }
 
-  function formatWeeks(arr, total) {
-    if (!arr || !arr.length) return '';
-    var par = weekParity(arr, total);
+  /* 一门课到底是不是单/双周：显式标记优先，没有才去推断。 */
+  function courseParity(c, total) {
+    if (!c) return 0;
+    if (c.parity === 1 || c.parity === 2) return c.parity;
+    return weekParity(c.weeks, total || settings().totalWeeks);
+  }
+
+  function formatWeeks(arr, total, parity) {
+    if (!arr || !arr.length) {
+      if (parity === 1) return '单周';
+      if (parity === 2) return '双周';
+      return '';
+    }
+    var par = parity || weekParity(arr, total);
     if (par) return par === 1 ? '单周' : '双周';
     var s = arr.slice().sort(function (a, b) { return a - b; });
     var res = [], i = 0;
@@ -158,6 +175,18 @@
   }
 
   function normalize(c) {
+    var total = load().settings.totalWeeks;
+    var parity = (c.parity === 1 || c.parity === 2) ? c.parity : 0;
+    // 用户手填的周次串里写了「单周 / 双周」时以文本为准
+    if (typeof c.weeks === 'string') {
+      if (/单\s*周/.test(c.weeks)) parity = 1;
+      else if (/双\s*周/.test(c.weeks)) parity = 2;
+    }
+    var weeks = parseWeeks(c.weeks, total);
+    // 只给了「单周 / 双周」而没有具体周次时，按学期总周数展开
+    if (!weeks.length && parity) {
+      weeks = oddEven(parity === 1 ? 1 : 0, total || 20);
+    }
     return {
       id: c.id || uid(),
       name: (c.name || '未命名课程').trim(),
@@ -166,7 +195,8 @@
       day: Math.min(7, Math.max(1, +c.day || 1)),
       start: Math.max(1, +c.start || 1),
       end: Math.max(+c.start || 1, +c.end || +c.start || 1),
-      weeks: parseWeeks(c.weeks, load().settings.totalWeeks),
+      weeks: weeks,
+      parity: parity,
       color: c.color || colorFor(c.name)
     };
   }
@@ -217,6 +247,7 @@
     settings: settings, courses: courses,
     colorFor: colorFor,
     parseWeeks: parseWeeks, formatWeeks: formatWeeks, weekParity: weekParity,
+    courseParity: courseParity,
     add: add, addMany: addMany, update: update, remove: remove,
     clear: clear, replaceAll: replaceAll, stat: stat, uid: uid,
     mondayOf: mondayOf

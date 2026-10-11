@@ -3,16 +3,27 @@
  * 路径来自正方教务系统的公开约定（/jwglxt 新版、/jsxsd 旧版），
  * 并用海南热带海洋学院（zfjw.hntou.edu.cn）实测校正过。
  *
- * 实测结论（2026-10，该校 /jwglxt 新版）：
+ * 实测结论（2026-10，该校 /jwglxt 新版，用真实账号跑通）：
  *   1. 登录页 action = /jwglxt/xtgl/login_slogin.html?time=<毫秒>
  *   2. 密码必须 RSA 加密：PKCS#1 v1.5 填充，密文 base64。
- *      公钥 /jwglxt/xtgl/login_getPublicKey.html 返回的 modulus/exponent 是 base64。
+ *      公钥 /jwglxt/xtgl/login_getPublicKey.html 返回的 modulus/exponent 是 base64，
+ *      该校是 1024 位（modulus 172 字符）。登录成功后 302 回 login_slogin.html。
  *   3. 验证码图片在 /jwglxt/kaptcha（不是 verifycode.servlet）。
  *   4. dlsfbxyzm=0 → 该校**默认不要验证码**；验证码框 #yzmDiv 平时隐藏，
  *      连错 yzcskz(=3) 次才出现。所以「不弹验证码」是正常的，不是坏了。
  *   5. dlsbsdsj=3 → 连错 3 次锁定 3 分钟。因此 App 绝不自动重试密码。
- *   6. 未登录访问受保护路径返回自定义状态码 901（不是 302）。
+ *   6. 未登录带 X-Requested-With 访问受保护路径返回自定义状态码 901（0 字节）；
+ *      不带这个头则返回登录页 HTML。所以判定会话必须带该头看 901。
  *   7. 该校服务器会间歇性不响应（疑似限流），所以请求要节流 + 重试。
+ *   8. ★ 课表真实入口（从主菜单扒出来的）：
+ *       页面  /jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N253508
+ *       数据  /jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2151
+ *       /jwglxt/xskbcx/... 那一支在本校**不存在**（404 系统维护页面）。
+ *   9. ★★ 查课表必须带 xnm(学年) 和 xqm(学期)，两个都不能空也不猜错：
+ *       传空值服务器直接回字面量 "null"（4 字节），什么都不给。
+ *       xqm 的取值是 3/12/16（第一/二/三学期），不是 1/2/3。
+ *       所以这里改成「先打开课表页面，读 #xnm / #xqm 下拉框的选中项，
+ *       再拿这个值去查」——跟浏览器完全一致，不依赖用户手填。
  *
  * 不同学校部署差异很大，路径仍做成可探测 + 可手动覆盖，
  * 抓不到时应改用「图片识别 / 文件导入」。
@@ -43,22 +54,30 @@
       kb: [
         // 权威写法：kbcx 目录 + gnmkdm=N2151，且 body 要带 kzlx=ck
         '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2151',
-        '/jwglxt/xskbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2535',
         '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N253508',
+        '/jwglxt/xskbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2535',
         '/jwglxt/xskbcx/xskbcx_cxXsKb.html?gnmkdm=N2535'
+      ],
+      // 「个人课表查询」页面本身。查课表前先打开它，是为了读 #xnm / #xqm
+      // 两个下拉框的选中项——正方不传这两个参数就什么都不返回。
+      kbIndex: [
+        '/jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N253508',
+        '/jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151'
       ]
     },
     jsxsd: {
       loginPage: '/jsxsd/xk/LoginToXk',
       pubkey: [],
       code: ['/jsxsd/verifycode.servlet', '/jsxsd/CheckCode.aspx', '/CheckCode.aspx', '/jsxsd/imgcode.jpg'],
-      kb: ['/jsxsd/xskb/xskb_list.do', '/jsxsd/kbcx/xskb_list.do']
+      kb: ['/jsxsd/xskb/xskb_list.do', '/jsxsd/kbcx/xskb_list.do'],
+      kbIndex: []
     },
     root: {
       loginPage: '/default.aspx',
       pubkey: [],
       code: ['/CheckCode.aspx', '/verifycode.servlet', '/sys/ValidateCode.aspx'],
-      kb: ['/xskbcx.aspx', '/xs_main.aspx?xh={user}']
+      kb: ['/xskbcx.aspx', '/xs_main.aspx?xh={user}'],
+      kbIndex: []
     }
   };
 
@@ -150,10 +169,12 @@
   var UA = 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36';
 
   /* ---------- 请求节流 ----------
-     实测：该校服务器在短时间连发若干请求后会直接不响应（连登录页都超时）。
+     实测：该校服务器在短时间连发若干请求后会直接不响应（连登录页都超时），
+     登录口更是会按 IP 限流——自动化脚本在十几分钟内连续登录几次之后，
+     即使是完全正确的账号密码也会被回「用户名或密码不正确」。
      所以把所有请求串成一条链，两次之间至少隔 THROTTLE_MS，并把
-     「不响应」视为可重试的临时故障。 */
-  var THROTTLE_MS = 400;
+     「不响应」视为可重试的临时故障。不要把 THROTTLE_MS 调太小。 */
+  var THROTTLE_MS = 900;
   var queue = Promise.resolve();
   var lastAt = 0;
 
@@ -501,8 +522,12 @@
 
   function lockHint(ctx) {
     var n = ctx && ctx.maxFail, m = ctx && ctx.lockMin;
-    if (n && m) return '注意：本校连错 ' + n + ' 次会锁定 ' + m + ' 分钟，App 不会自动重试，请核对后再试。';
-    return '';
+    var base = '注意：本校连错 ' + (n || '几') + ' 次会锁定 ' + (m || '几') + ' 分钟，' +
+      'App 不会自动重试，请核对后再试。';
+    // 实测：该校登录口按 IP 限流，短时间连续登录多次后，
+    // 即使账号密码完全正确也会被回「用户名或密码不正确」。
+    return base + '如果密码确定没错，可能是刚才连试太多次被限流了，等 5~10 分钟再试；' +
+      '或者直接用手机流量/校园网打开教务系统网页登一次确认账号可用。';
   }
 
   /* ---------- 登录 ---------- */
@@ -559,6 +584,105 @@
   }
 
   /* ---------- 抓课表 ---------- */
+
+  /* 把页面里的 <select> 全抠出来：{selectId: [{value,text,selected}]}。
+     正方把学年/学期做成了 #xnm / #xqm 两个下拉框，
+     选中项就是「当前学期」，这是最权威的来源。 */
+  function parseSelects(html) {
+    var out = {};
+    var re = /<select\b([^>]*)>([\s\S]*?)<\/select>/gi, m;
+    while ((m = re.exec(String(html == null ? '' : html)))) {
+      var attrs = m[1];
+      var key = attrOf(attrs, 'id') || attrOf(attrs, 'name');
+      if (!key) continue;
+      var opts = [], o;
+      var ore = /<option\b([^>]*)>([\s\S]*?)<\/option>/gi;
+      while ((o = ore.exec(m[2]))) {
+        var v = attrOf(o[1], 'value');
+        opts.push({
+          value: (v == null ? '' : String(v).trim()),
+          text: String(o[2]).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(),
+          selected: /selected/i.test(o[1])
+        });
+      }
+      out[key] = opts;
+    }
+    return out;
+  }
+
+  /* 取下拉框的选中项；没有 selected 标记时退回第一个非空项。 */
+  function pickSelected(opts) {
+    if (!opts || !opts.length) return null;
+    var i;
+    for (i = 0; i < opts.length; i++) if (opts[i].selected && opts[i].value) return opts[i].value;
+    for (i = 0; i < opts.length; i++) if (opts[i].value) return opts[i].value;
+    return null;
+  }
+
+  function labelOf(opts, value) {
+    for (var i = 0; i < (opts || []).length; i++) {
+      if (opts[i].value === value) return opts[i].text || value;
+    }
+    return value;
+  }
+
+  /* 打不开课表页时的兜底：按当前日期推。
+     学年码 = 学年起始年份（9 月开学），xqm 3=第一学期 / 12=第二学期。 */
+  function guessTerm(now) {
+    var d = now || new Date();
+    var y = d.getFullYear(), mo = d.getMonth() + 1;
+    return {
+      xnm: String(mo >= 8 ? y : y - 1),
+      xqm: (mo >= 2 && mo <= 7) ? '12' : '3'
+    };
+  }
+
+  /* 拿到「要查哪个学年学期」。优先顺序：
+     ① 界面上明确填了 → 用填的（用户覆盖）
+     ② 打开课表页面读 #xnm / #xqm 的选中项（跟浏览器一致，最可靠）
+     ③ 按当前日期推算（并提示用户可以手填） */
+  function resolveTerm(ctx, log, opts) {
+    opts = opts || {};
+    var gx = String(opts.xnm == null ? '' : opts.xnm).trim();
+    var gq = String(opts.xqm == null ? '' : opts.xqm).trim();
+    if (gx && gq) {
+      log('· 使用界面上填的学年学期：xnm=' + gx + '，xqm=' + gq);
+      return Promise.resolve({ xnm: gx, xqm: gq, source: 'manual' });
+    }
+
+    var base = ctx.base;
+    var list = ((PATHS[ctx.variant] || PATHS.jwglxt).kbIndex || []).slice();
+    var i = 0;
+    function next() {
+      if (i >= list.length) return Promise.resolve(null);
+      var path = list[i++];
+      var url = base + path;
+      log('读取课表页（为了拿学年学期）：' + url);
+      return req(url, { method: 'GET', accept: 'text/html', log: log, tries: 2 })
+        .then(function (res) {
+          if (res.status === 901) throw new Error('未登录（901）');
+          var sel = parseSelects(res.data);
+          var xnm = pickSelected(sel.xnm), xqm = pickSelected(sel.xqm);
+          if (xnm && xqm) {
+            log('✔ 读到当前学年学期：' + labelOf(sel.xnm, xnm) + ' 第' +
+              (xqm === '3' ? '一' : xqm === '12' ? '二' : xqm === '16' ? '三' : '?') +
+              '学期（xnm=' + xnm + '，xqm=' + xqm + '）');
+            return { xnm: xnm, xqm: xqm, source: 'page' };
+          }
+          log('· 这个页面里没有学年/学期下拉框');
+          return next();
+        })
+        .catch(function (e) { log('✘ ' + e.message); return next(); });
+    }
+    return next().then(function (r) {
+      if (r) return r;
+      var g = guessTerm();
+      log('· 没读到页面下拉框，按当前日期推算：xnm=' + g.xnm + '，xqm=' + g.xqm);
+      g.source = 'guess';
+      return g;
+    });
+  }
+
   function fetchKb(ctx, user, xnm, xqm, log) {
     var base = ctx.base;
     var list = (PATHS[ctx.variant] || PATHS.jwglxt).kb;
@@ -594,9 +718,21 @@
         if (typeof d === 'object' && d) j = d;
         else { try { j = JSON.parse(d); } catch (e) { j = null; } }
 
-        if (j && j.kbList && j.kbList.length) { log('✔ 取到 ' + j.kbList.length + ' 条课程记录'); return j.kbList; }
+        if (j && j.kbList && j.kbList.length) {
+          log('✔ 取到 ' + j.kbList.length + ' 条课程记录' +
+            (j.xsxx && j.xsxx.XNM ? '（' + j.xsxx.XNM + ' 学年）' : ''));
+          return j.kbList;
+        }
         if (j && j.timetable && j.timetable.length) return j.timetable;
         if (Array.isArray(j) && j.length) { log('✔ 取到数组 ' + j.length + ' 条'); return j; }
+
+        // 正方在「学年/学期不对」时不报错，而是返回字面量 null。
+        // 这是最容易被误判成「接口不存在」的一种响应，单独说清楚。
+        if (typeof d === 'string' && d.trim() === 'null') {
+          log('✘ ' + url + ' 返回 null → 学年/学期不对（xnm=' + (xnm || '空') +
+            '，xqm=' + (xqm || '空') + '）');
+          return next();
+        }
 
         // 可能是 HTML 页面（旧版 jsxsd），交给表格解析
         if (typeof d === 'string' && /<t[dhr]/i.test(d)) {
@@ -620,19 +756,29 @@
 
   /**
    * 完整流程。ctx 由 prepare() 得到。
-   * @returns Promise<{courses:Array, raw:any}>
+   * @returns Promise<{courses:Array, raw:any, term:Object}>
    */
   function run(ctx, opts) {
     var log = opts.log || function () { };
+    var term = null;
     return login(ctx, opts.user, opts.pass, opts.code, opts.rsaMode || 'pkcs1', log)
-      .then(function () { return fetchKb(ctx, opts.user, opts.xnm, opts.xqm, log); })
+      .then(function () { return resolveTerm(ctx, log, opts); })
+      .then(function (t) {
+        term = t;
+        ctx.term = t;                     // 供界面回填「学年 / 学期」
+        return fetchKb(ctx, opts.user, t.xnm, t.xqm, log);
+      })
       .then(function (raw) {
+        var courses;
         if (raw && raw.__html) {
-          return { courses: global.Parser.parseTable(htmlToMatrix(raw.__html), opts.totalWeeks), raw: raw.__html };
+          courses = global.Parser.parseTable(htmlToMatrix(raw.__html), opts.totalWeeks);
+        } else {
+          courses = global.Parser.parseJwList(raw, opts.totalWeeks);
         }
-        var courses = global.Parser.parseJwList(raw, opts.totalWeeks);
-        if (!courses.length) throw new Error('接口有返回，但没能解析出课程。请展开「高级」核对接口路径，或改用图片 / 文件导入。');
-        return { courses: courses, raw: raw };
+        if (!courses.length) {
+          throw new Error('接口有返回，但没能解析出课程。请展开「高级」核对接口路径，或改用图片 / 文件导入。');
+        }
+        return { courses: courses, raw: raw, term: term };
       });
   }
 
@@ -687,6 +833,10 @@
     detectCode: detectCode,
     buildLoginBody: buildLoginBody,
     classifyLogin: classifyLogin,
+    parseSelects: parseSelects,
+    pickSelected: pickSelected,
+    guessTerm: guessTerm,
+    resolveTerm: resolveTerm,
     prepare: prepare,
     run: run,
     htmlToMatrix: htmlToMatrix,

@@ -182,7 +182,8 @@
         <button class="btn small" id="jwRefreshCode">换一张</button>
       </div>
       <div class="hint" id="jwNote"></div>
-      <label class="row"><span>学年</span><input type="text" id="jwXnm" placeholder="2026" inputmode="numeric"></label>
+      <label class="row"><span>学年</span><input type="text" id="jwXnm" placeholder="留空自动识别，如 2026" inputmode="numeric"></label>
+      <div class="hint" style="margin:-4px 0 8px">学年 / 学期可以留空——App 会自己打开课表页读出教务的「当前学期」。只有自动识别不准时才需要手填（学期码：3 = 第 1 学期，12 = 第 2 学期）。</div>
       <label class="row"><span>学期</span>
         <select id="jwXqm">
           <option value="3">第 1 学期（秋）</option>
