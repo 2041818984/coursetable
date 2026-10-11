@@ -114,7 +114,10 @@
       : fmtDate(ws) + ' – ' + fmtDate(addDays(ws, days - 1))) +
       ' · ' + (state.week % 2 ? '单周' : '双周');
 
-    $('monthLabel').textContent = (ws.getMonth() + 1) + '月';
+    $('monthLabel').textContent = String(ws.getMonth() + 1);   // 只放数字，「月」字在 HTML 里
+
+    // 「回到本周」只在不在当前周时出现——当前周点了也没意义，还挡课卡
+    $('btnToday').hidden = isThisWeek;
 
     var todayStr = new Date().toDateString();
     $$('.grid-head .dow').forEach(function (el) {
@@ -177,9 +180,12 @@
 
     var el = document.createElement('div');
     el.className = 'course' + (inWeek ? '' : ' off');
-    el.style.gridColumn = String(c.day + 1);
+    // 结束线必须写死成 span 1：只给起始线时，绝对/相对定位的包含块会被当成「起始列→最后一列」，
+    // 卡片就会横铺整行、互相覆盖。写上 span 1 后，卡片严格只占自己那一列。
+    el.style.gridColumn = (c.day + 1) + ' / span 1';
     el.style.gridRow = c.start + ' / span ' + Math.max(1, c.end - c.start + 1);
     var lane = c._lane || 0;
+    // left/width 的百分比相对「自己的网格区域（一列）」算，正好把同簇课程并排分列
     el.style.left = (lane / lanes * 100) + '%';
     el.style.width = (100 / lanes) + '%';
     el.dataset.id = c.id;
@@ -627,7 +633,7 @@
   /* 图片识别：切换引擎时同步下面的说明文字 */
   function syncEngineTip() {
     $('ocrTip').innerHTML = state.engine === 'llm'
-      ? 'AI 识别会把图片发给你在「设置」里配置的模型服务，更准但需要联网和 API Key。识别不动时，先到「设置 → AI 识别 → 测试连接」看看服务端怎么回。'
+      ? 'AI 识别会把图片发给你在「设置」里配置的模型服务（需支持图片输入的模型），更准但需要联网和 API Key。识别不动时，先到「设置 → AI 识别 → 测试连接」看看服务端怎么回。<b>AI 失败会自动改用本地 OCR 兜底</b>，不用你手动切换。'
       : '首次识别要加载中文模型（约 20MB，已随 App 打包，无需联网），大约十几秒；之后同一台手机上再识别会快很多。识别过程随时可以点「取消识别」。';
   }
 
@@ -642,6 +648,7 @@
     cancelBtn.hidden = false;
     $('ocrTip').style.display = 'none';
     var t0 = Date.now();
+    var usedFallback = false;
 
     function onP(m, p) {
       var sec = Math.round((Date.now() - t0) / 1000);
@@ -654,15 +661,36 @@
       cancelBtn.hidden = true;
     }
 
-    var job = state.engine === 'llm'
-      ? OcrImport.runLlm(state.imgDataUrl, st.api, onP, st.totalWeeks)
-      : OcrImport.runOcr(state.imgDataUrl, onP, st.totalWeeks);
+    function firstLine(s) { return String(s).split('\n')[0]; }
+
+    var job;
+    if (state.engine === 'llm') {
+      // AI 识别失败时，自动改用本地 OCR 再试一次（同一张图）——
+      // 这样「图片识别导入」这条功能永远不会是死路。
+      job = OcrImport.runLlm(state.imgDataUrl, st.api, onP, st.totalWeeks)
+        .catch(function (e) {
+          var aiErr = e && e.message ? e.message : String(e);
+          usedFallback = true;
+          onP('AI 识别失败（原话：' + firstLine(aiErr) + '），已自动改用本地 OCR', null);
+          return OcrImport.runOcr(state.imgDataUrl, onP, st.totalWeeks)
+            .then(function (r) { r._aiError = aiErr; return r; })
+            .catch(function (e2) {
+              var ocrErr = e2 && e2.message ? e2.message : String(e2);
+              // 两条错误一起展示，用户能一次看全
+              throw new Error('AI 识别失败：' + aiErr +
+                '\n\n已自动改用本地 OCR，但本地 OCR 也失败：' + ocrErr);
+            });
+        });
+    } else {
+      job = OcrImport.runOcr(state.imgDataUrl, onP, st.totalWeeks);
+    }
 
     job.then(function (r) {
       finish();
       bar.style.width = '100%';
-      msg.textContent = '识别完成，共 ' + r.courses.length + ' 条';
+      msg.textContent = '识别完成，共 ' + r.courses.length + ' 条' + (usedFallback ? '（本地 OCR 兜底）' : '');
       clearLog($('ocrRaw'));
+      if (usedFallback && r._aiError) log($('ocrRaw'), 'AI 识别失败：' + r._aiError + '\n');
       log($('ocrRaw'), r.raw || '(无文本输出)');
       if (!r.courses.length) { toast('没识别出课程，换个方式再试'); return; }
       showConfirm(r.courses, '图片识别');
@@ -723,6 +751,38 @@
     });
   }
 
+  /* 设置页：把服务商预设填进下拉，选中即自动填好「接口地址 + 常用模型名」 */
+  function buildApiPresets() {
+    var sel = $('setApiPreset');
+    if (!sel || sel.dataset.built) return;
+    sel.dataset.built = '1';
+    var list = OcrImport.PROVIDERS || [];
+    list.forEach(function (p) {
+      var o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.name + (p.model ? '（' + p.model + '）' : '') + (p.warn ? '（不支持图片）' : '');
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () {
+      var p = list.filter(function (x) { return x.id === sel.value; })[0];
+      if (!p) return;
+      // 选「自定义」= 清空上一家的地址/模型，避免残留；
+      // 其余预设：有值才覆盖，空值（自定义那条）就留空。
+      $('setApiBase').value = p.base || '';
+      $('setApiModel').value = p.model || '';
+      var st = S.settings();
+      st.api = {
+        base: $('setApiBase').value.trim(),
+        model: $('setApiModel').value.trim(),
+        key: $('setApiKey').value.trim()
+      };
+      S.save();
+      if (p.warn) toast(p.warn);
+      else if (p.id === 'custom') toast('请自行填写需支持图片输入的模型');
+      else toast('已填入 ' + p.name);
+    });
+  }
+
   /* ---------------- 设置 ---------------- */
   function loadSettingsUI() {
     var st = S.settings();
@@ -745,6 +805,7 @@
   }
 
   function bindSettings() {
+    buildApiPresets();
     function bindNum(id, key) {
       $(id).addEventListener('change', function () {
         var v = parseInt($(id).value, 10);
@@ -864,6 +925,7 @@
       toast('已回到第 ' + state.week + ' 周');
     });
     $('btnAdd').addEventListener('click', function () { openManual(null, null, null); });
+    $('btnImport').addEventListener('click', function () { goto('page-import'); });
     $('btnShare').addEventListener('click', shareSchedule);
     $('btnMore').addEventListener('click', function () { goto('page-import'); });
     bindSwipe();
@@ -1082,6 +1144,10 @@
     bind();
     bindSettings();
     bindBack();
+
+    // 列宽是百分比，转屏 / 改变窗口后要重排，否则分列会错位
+    window.addEventListener('resize', render);
+    window.addEventListener('orientationchange', render);
 
     // 引擎选择以界面上高亮的那一个为准（默认 AI 识别）
     var segActive = $('ocrEngine').querySelector('.seg-i.active');

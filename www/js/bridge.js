@@ -132,21 +132,83 @@
     }).join(''); } catch (e) { return ''; }
   }
 
-  function pkcs1pad(text, nBytes) {
-    var ba = [];
-    var i = text.length - 1;
-    while (i >= 0 && ba.length < nBytes - 11) {
-      var c = text.charCodeAt(i--);
-      // unshift 会保持参数原顺序插到数组头部，所以 UTF-8 的高位字节必须写在前面
-      if (c < 128) ba.unshift(c);
-      else if (c < 2048) ba.unshift((c >> 6) | 192, (c & 63) | 128);
-      else ba.unshift((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128);
+  function bytesToHex(bytes) {
+    var out = '';
+    for (var i = 0; i < bytes.length; i++) out += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+    return out;
+  }
+
+  /* 一个大整数的「位长」。PKCS#1 要求 RSA 分组长度 k = ceil(bitlen(n)/8)。 */
+  function bitLength(x) { return x === 0n ? 0 : x.toString(2).length; }
+
+  /* 合理的模数位长区间：512 ~ 8192 bit（覆盖最低强度的旧部署到 8192 位强密钥）。
+     用来在两个候选解码里挑出真正是公钥模数的那个。 */
+  var MIN_MOD_BITS = 512;
+  var MAX_MOD_BITS = 8192;
+
+  /**
+   * 解析公钥模数，返回 { hex, n, bits }。
+   *
+   * 为什么不能只用 toHex()：
+   *   正方 /jwglxt/xtgl/login_getPublicKey.html 返回的 modulus 是 **base64**，
+   *   解码后通常是 128 字节（1024 位），但**常常带一个前导 0x00**，
+   *   于是变成 129 字节。如果直接拿「字节数」当分组长度 k，就会多算 1 字节，
+   *   PKCS#1 的 00 02 前导填充整体错位，服务器解填充失败，
+   *   一律回「用户名或密码不正确」——这就是登录永远失败的真因。
+   *
+   * 另一个坑：极少数字符串既是合法 hex 又是合法 base64，looksHex() 会误判。
+   *   所以这里把两种口径都解一遍，取「位长落在 512~8192 bit」的那个；
+   *   都不在区间时退回 hex 口径（保持旧行为），都不合法时返回 null。
+   */
+  function resolveModulus(raw) {
+    if (!raw) return null;
+    var cands = [], seen = {};
+    var push = function (hex) {
+      if (!hex || seen[hex]) return;
+      seen[hex] = 1;
+      var n = BigInt('0x' + hex);
+      cands.push({ hex: hex, n: n, bits: bitLength(n) });
+    };
+    if (looksHex(raw)) push(String(raw).toLowerCase());
+    try { push(bytesToHex(base64ToBytes(raw))); } catch (e) { /* 不是合法 base64，忽略 */ }
+    if (!cands.length) return null;
+    for (var i = 0; i < cands.length; i++) {
+      if (cands[i].bits >= MIN_MOD_BITS && cands[i].bits <= MAX_MOD_BITS) return cands[i];
     }
-    if (ba.length > nBytes - 11) return null;
-    var padLen = nBytes - 3 - ba.length;
+    return cands[0];
+  }
+
+  /* 把明文编码成 UTF-8 字节数组（完整、不截断）。顺带正确处理代理对（4 字节字符）。 */
+  function utf8Bytes(text) {
+    var out = [];
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (c < 128) {
+        out.push(c);
+      } else if (c < 2048) {
+        out.push((c >> 6) | 192, (c & 63) | 128);
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < text.length &&
+                 text.charCodeAt(i + 1) >= 0xDC00 && text.charCodeAt(i + 1) <= 0xDFFF) {
+        var cp = 0x10000 + ((c - 0xD800) << 10) + (text.charCodeAt(i + 1) - 0xDC00);
+        out.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+        i++;
+      } else {
+        out.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128);
+      }
+    }
+    return out;
+  }
+
+  function pkcs1pad(text, nBytes) {
+    // 先把整段明文编码完（不截断），超长直接判失败。
+    // 靠「累加到上限就停」来截断的话，超长密码会产出一段**能解开、但明文不符**的密文，
+    // 服务器解填充后对不上，只会回「用户名或密码不正确」——错误被伪装成了密码错。
+    var msg = utf8Bytes(text);
+    if (msg.length > nBytes - 11) return null;
+    var padLen = nBytes - 3 - msg.length;          // ≥ 8，符合 PKCS#1 v1.5
     var ps = [];
-    for (var k = 0; k < padLen; k++) ps.push(Math.floor(Math.random() * 254) + 1);
-    return [0, 2].concat(ps, [0], ba);
+    for (var k = 0; k < padLen; k++) ps.push(Math.floor(Math.random() * 254) + 1);   // 1..254，非零
+    return [0, 2].concat(ps, [0], msg);
   }
 
   function modPow(b, e, m) {
@@ -166,6 +228,12 @@
     return hex ? BigInt('0x' + hex) : 0n;
   }
 
+  /** 公钥模数的位长（用于日志展示；解析失败返回 0）。 */
+  function modulusBits(modulus) {
+    var m = resolveModulus(modulus);
+    return m ? m.bits : 0;
+  }
+
   /**
    * @param {string} password 明文密码
    * @param {string} modulus  公钥模数（hex 或 base64）
@@ -174,10 +242,13 @@
    * @returns {string} base64 密文
    */
   function rsaEncrypt(password, modulus, exponent, mode) {
-    var nHex = toHex(modulus), eHex = toHex(exponent);
-    if (!nHex || !eHex) throw new Error('公钥格式无法识别（既非 hex 也非 base64）');
-    var n = BigInt('0x' + nHex), e = BigInt('0x' + eHex);
-    var nBytes = nHex.length / 2;
+    var mod = resolveModulus(modulus);
+    var eHex = toHex(exponent);
+    if (!mod || !eHex) throw new Error('公钥格式无法识别（既非 hex 也非 base64）');
+    var n = mod.n, e = BigInt('0x' + eHex);
+    // 分组长度由模数的「位长」算，不能用 base64 解码后的字节数：
+    // 正方返回的 modulus 常带前导 0x00（1024 位解出 129 字节），用字节数会多算 1 字节。
+    var nBytes = Math.ceil(mod.bits / 8);
 
     var m;
     if (mode === 'raw') {
@@ -232,6 +303,7 @@
     hasHttp: hasHttp,
     http: http,
     rsaEncrypt: rsaEncrypt,
+    modulusBits: modulusBits,
     bytesToBase64: bytesToBase64,
     base64ToBytes: base64ToBytes,
     readFileAsDataURL: readFileAsDataURL,

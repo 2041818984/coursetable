@@ -474,6 +474,58 @@ function aiCases() {
   });
 
   cases.push(function () {
+    // 网关错误：首次带可选参数失败后，应「去掉可选参数重试一次」
+    var bodies = [];
+    global.Bridge.http = function (opt) {
+      bodies.push(String(opt.data));
+      return Promise.resolve({
+        status: 200, headers: {},
+        data: JSON.stringify({ code: 50507, message: 'Request failed: Unknown error', data: null }),
+        url: ''
+      });
+    };
+    return O.runLlm(IMG, CFG, null, 20).then(function () {
+      t('网关错误必须报错', false, '居然成功返回了');
+    }, function (e) {
+      t('网关错误重试一次（共 2 次请求）', bodies.length === 2, bodies.length);
+      t('首个请求带 temperature', bodies[0].indexOf('temperature') >= 0, bodies[0].slice(0, 120));
+      t('重试请求去掉 temperature', bodies[1].indexOf('temperature') < 0, bodies[1].slice(0, 120));
+      t('重试请求仍含 model+messages',
+        bodies[1].indexOf('"model"') >= 0 && bodies[1].indexOf('"messages"') >= 0, bodies[1].slice(0, 120));
+      t('错误里仍带网关原话', /50507/.test(e.message) && /Request failed/.test(e.message), e.message.slice(0, 120));
+    });
+  });
+
+  cases.push(function () {
+    var notes = [];
+    ok(openai(JSON.stringify(LIST)));
+    return O.runLlm(IMG, CFG, function (m) { notes.push(String(m)); }, 20).then(function () {
+      t('进度里汇报压缩后 base64 大小',
+        notes.some(function (m) { return /压缩/.test(m) && /KB/.test(m); }), notes);
+      t('压缩按长边 ≤1280 / 质量 0.8 说明',
+        notes.some(function (m) { return /1280/.test(m) && /0\.8/.test(m); }), notes);
+    });
+  });
+
+  cases.push(function () {
+    var ids = (O.PROVIDERS || []).map(function (p) { return p.id; });
+    t('服务商预设含 OpenAI/DeepSeek/智谱/通义/自定义',
+      ['openai', 'deepseek', 'zhipu', 'qwen', 'custom'].every(function (id) { return ids.indexOf(id) >= 0; }), ids);
+    var byId = {};
+    (O.PROVIDERS || []).forEach(function (p) { byId[p.id] = p; });
+    t('OpenAI 预设 = api.openai.com/v1 + gpt-4o-mini',
+      byId.openai && byId.openai.base === 'https://api.openai.com/v1' && byId.openai.model === 'gpt-4o-mini');
+    t('智谱预设模型是 glm-4v-flash（支持图片）',
+      byId.zhipu && byId.zhipu.model === 'glm-4v-flash');
+    t('通义预设模型是 qwen-vl-plus（支持图片）',
+      byId.qwen && byId.qwen.model === 'qwen-vl-plus');
+    t('DeepSeek 预设带「不支持图片」警示（避免误导）',
+      !!(byId.deepseek && byId.deepseek.warn && /没有支持图片|不支持图片/.test(byId.deepseek.warn)),
+      byId.deepseek && byId.deepseek.warn);
+    return Promise.resolve();
+  });
+
+  cases.push(function () {
     return O.runLlm(IMG, { base: '', key: '', model: '' }, null, 20).then(function () {
       t('没填接口地址时给提示', false);
     }, function (e) {

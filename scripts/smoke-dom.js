@@ -229,6 +229,27 @@ t('时间轴沿用自定义作息', (() => {
   return /07:30/.test(p0);
 })());
 
+console.log('\n[9b] WakeUp 风格：顶栏 / 日期行 / 底部 Tab / 右边缘浮动按钮');
+t('月份左上角只放数字', /^\d+$/.test($('monthLabel').textContent.trim()), $('monthLabel').textContent);
+t('月份旁有「月」字',
+  /月/.test(w.document.querySelector('.grid-head .corner').textContent),
+  w.document.querySelector('.grid-head .corner').textContent);
+t('右边缘浮动按钮 = #btnToday', $('btnToday').classList.contains('week-fab'), $('btnToday').className);
+t('浮动按钮文案是「回到本周」', /回到本周/.test($('btnToday').textContent), $('btnToday').textContent);
+t('顶栏有导入图标 #btnImport（SVG）', !!$('btnImport') && !!$('btnImport').querySelector('svg'));
+t('顶栏图标不是 emoji', !/[\u{1F300}-\u{1FAFF}]/u.test($('btnAdd').closest('.sch-acts').textContent));
+t('点导入图标跳到导入页', (() => {
+  $('btnImport').click();
+  const ok = $('page-import').classList.contains('active');
+  w.document.querySelector('.tab[data-goto="page-schedule"]').click();
+  return ok;
+})());
+['page-schedule', 'page-import', 'page-settings'].forEach(pg => {
+  const tab = w.document.querySelector('.tab[data-goto="' + pg + '"]');
+  t('Tab 有 SVG 图标：' + pg, !!(tab && tab.querySelector('svg')));
+  t('Tab 有中文文字：' + pg, !!(tab && /[\u4e00-\u9fff]/.test(tab.textContent)));
+});
+
 console.log('\n[10] 同节次撞车 → 并排分列');
 w.Store.replaceAll([
   { name: 'A课', day: 3, start: 1, end: 2, weeks: w.Store.parseWeeks('1-16', 20) },
@@ -244,6 +265,12 @@ t('撞车的两门各占一半宽（left 0% / 50%）',
   laneCards[1].style.left === '50%' && laneCards[1].style.width === '50%',
   laneCards[0] ? [laneCards[0].style.left, laneCards[0].style.width, laneCards[1] && laneCards[1].style.left] : '');
 t('不撞车的占满整格', laneCards[2] && laneCards[2].style.width === '100%', laneCards[2] && laneCards[2].style.width);
+
+// 横向溢出回归守卫：gridColumn 必须写死结束线（"N / span 1"）。
+// 只给起始线（"N"）时绝对/相对定位的包含块会被当成「起始列→最后一列」，卡片横铺整行。
+const gcAll = Array.prototype.map.call(w.document.querySelectorAll('#gridBody .course'), c => c.style.gridColumn);
+t('每张卡的 gridColumn 都形如 "N / span 1"（横向溢出守卫）',
+  gcAll.length > 0 && gcAll.every(s => / \/ span 1$/.test(s)), gcAll);
 w.Store.replaceAll([]);
 
 console.log('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');

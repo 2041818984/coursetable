@@ -69,6 +69,7 @@ scripts/
   probe-hntou-login.py   手动探测：登录页字段 / 公钥 / 试一次登录
   probe-hntou-kb.py      手动探测：课表接口路径
   smoke-*.js / selftest.js  自测
+  layout-check.js        课表布局几何回归（无头浏览器实测，npm run check:layout）
   fixtures/              测试夹具
     hntou-login.html     海南热带海洋学院教务登录页（真实页面，csrftoken 已替换成假值）
 ```
@@ -306,17 +307,35 @@ python -m http.server 8123
 npm test
 ```
 
-会依次跑五个测试（共 399 项）：
+会依次跑五个测试（共 435 项）：
 
 | 脚本 | 项数 | 覆盖内容 |
 | --- | --- | --- |
-| `scripts/selftest.js` | 55 | 周次 / 单双周识别 / 单元格 / 表格 / 教务 JSON / OCR 词块还原 / RSA / 存储 |
-| `scripts/smoke-dom.js` | 81 | 页面初始化 + 手动添加的点选交互 + 新版课表（顶栏图标、时间轴、非本周淡化、单双周标签、同节次并排分列、日期行今天高亮） |
+| `scripts/selftest.js` | 65 | 周次 / 单双周识别 / 单元格 / 表格 / 教务 JSON / OCR 词块还原 / RSA（含「带前导 0x00 的 129 字节模数」与「超长密码不静默截断」回归）/ 存储 |
+| `scripts/smoke-dom.js` | 95 | 页面初始化 + 手动添加的点选交互 + 新版课表（顶栏图标、时间轴、非本周淡化、单双周标签、同节次并排分列、日期行今天高亮、WakeUp 风格顶栏/日期行/Tab/浮动按钮）+ `gridColumn` 写死 `N / span 1` 的横向溢出守卫 |
 | `scripts/smoke-jw.js` | 157 | 教务直连：**真实登录页 / 真实课表 JSON / 真实课表页面夹具**解析、单双周与多段周次、验证码策略、表单组装、响应判定、不自动重试、`null` 响应判定、学年学期自动识别、完整抓课表链路、HTTP 901 |
 | `scripts/smoke-pdf.js` | 24 | PDF 词块提取、表结构还原、逐字段校验 |
-| `scripts/smoke-ocr.js` | 82 | **真实跑一遍中文 OCR**：模型完整性、汉字空格收敛、按字切词粘合、抹线坐标换算与缩放上限、表头识别、4 门课落位；另含 **AI 识别的 19 项返回解析**（标准 OpenAI / Anthropic / 网关套壳 / 把错误包在 200 里 / 重试 / 测试连接） |
+| `scripts/smoke-ocr.js` | 94 | **真实跑一遍中文 OCR**：模型完整性、汉字空格收敛、按字切词粘合、抹线坐标换算与缩放上限、表头识别、4 门课落位；另含 **AI 识别的 31 项**（标准 OpenAI / Anthropic / 网关套壳 / 把错误包在 200 里 / 去掉可选参数重试 / 压缩日志 / 服务商预设 / 测试连接） |
 
 RSA 那几项用 Node 内置 crypto 生成真实密钥对再解密比对。PDF 那几项用真实 pdf.js 解析一份生成的课表 PDF，`scripts/test-timetable.pdf` 可用 `python scripts/make-test-pdf.py` 重新生成。
+
+### 课表布局几何检查（`npm run check:layout`）
+
+`selftest / smoke-*` 都跑在 Node + jsdom 上，**没有布局引擎，测不出「卡片横向溢出」这类 bug**。所以额外有一个用**无头 Edge / Chrome 真实排版**的几何回归：
+
+```bash
+npm run check:layout
+```
+
+它先 `npm run preview` 生成 `preview.html`，再往副本里注入探针，在「手机窄屏」和「宽屏」两种视口各跑一遍，用 `getBoundingClientRect()` 逐张量卡片，断言（每视口 6 项）：
+
+- 表头 `.grid-head` 与 `#gridBody` 的 `grid-template-columns` 完全一致；
+- 每张卡左右边缘都落在**它自己那一列**内（±2px），右边缘不越过 `#gridBody`；
+- 同一簇（同一天、纵向重叠）里并排的卡片**互不重叠**；
+- `.week-fab`（「回到本周」）的矩形与所有课程卡**都不相交**（探针会先临时显示它再量）；
+- `scrollWidth ≤ 视口宽 + 1`（没有横向溢出）。
+
+没装 Edge / Chrome 时打印 `SKIP` 并以 0 退出，不阻塞 CI。
 
 `smoke-jw.js` 里的教务夹具全部是**真实抓下来的**：
 

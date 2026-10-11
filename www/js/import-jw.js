@@ -392,9 +392,11 @@
     }).then(function (j) {
       if (j && (j.modulus || j.Modulus)) {
         var mod = String(j.modulus || j.Modulus);
-        var bytes = Math.round(mod.length * 3 / 4);   // base64 → 字节
-        log('✔ 已获取 RSA 公钥（' + mod.length + ' 字符 base64，约 ' + bytes + ' 字节 ≈ ' +
-          (bytes * 8) + ' bit）');
+        // 模数是 base64，解码后常带一个前导 0x00（1024 位解出 129 字节）。
+        // 真正的分组长度按「位长」算，别直接用字节数，免得日志和实际加密口径对不上。
+        var bits = (Bridge.modulusBits ? Bridge.modulusBits(mod) : 0) || Math.round(mod.length * 3 / 4) * 8;
+        log('✔ 已获取 RSA 公钥（' + mod.length + ' 字符 base64，模数 ' + bits + ' bit ≈ ' +
+          Math.ceil(bits / 8) + ' 字节）');
         return { modulus: mod, exponent: j.exponent || j.Exponent || 'AQAB' };
       }
       log('· 该站点未返回公钥，将按明文密码提交');

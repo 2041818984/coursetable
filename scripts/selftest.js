@@ -163,6 +163,59 @@ var longP = new Array(30).join('长') + 'X';
 var plain2 = dec(B.rsaEncrypt(longP, nB64url, 'AQAB', 'pkcs1'), crypto.constants.RSA_PKCS1_PADDING);
 t('较长密码也能解开', plain2.toString('utf8') === longP);
 
+console.log('\n[6b] RSA 分组长度：正方那种「带前导 0x00 的 129 字节模数」');
+// 用户踩的真实坑：正方 login_getPublicKey.html 返回的 modulus 是 base64，
+// 解码后 129 字节（前导 00），真正的模数位长是 1024 → 分组长度 k 必须是 128。
+// 老代码用「字节数」当 k，多算 1 字节，PKCS#1 填充整体错位 → 服务器一律回「密码不正确」。
+var kpPad = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });
+var jwkPad = kpPad.publicKey.export({ format: 'jwk' });
+var nRaw = Buffer.from(jwkPad.n.replace(/-/g, '+').replace(/_/g, '/') +
+  '='.repeat((4 - jwkPad.n.length % 4) % 4), 'base64');   // 1024 位 = 128 字节
+t('夹具：原始模数是 128 字节', nRaw.length === 128, nRaw.length);
+
+// 手工在 base64 前面拼一个前导 00 字节：解码后 129 字节，模拟正方形态
+var nPadded = Buffer.concat([Buffer.from([0]), nRaw]);
+var b64Padded = nPadded.toString('base64');
+t('夹具：带前导 00 的模数解码后 129 字节',
+  Buffer.from(b64Padded, 'base64').length === 129, Buffer.from(b64Padded, 'base64').length);
+
+var encPad = B.rsaEncrypt('test123', b64Padded, jwkPad.e, 'pkcs1');
+t('129 字节模数 → 密文仍是 128 字节（分组长度按位长算）',
+  Buffer.from(encPad, 'base64').length === 128, Buffer.from(encPad, 'base64').length);
+t('129 字节模数 → 密文 base64 长度 172 字符',
+  encPad.length === 172, encPad.length);
+t('129 字节模数 → 私钥 PKCS#1 能解开，明文一致',
+  crypto.privateDecrypt({ key: kpPad.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(encPad, 'base64')).toString() === 'test123');
+
+// 无前导 00 的 128 字节模数（有些部署不给前导零）也要同样正确
+var b64Plain = nRaw.toString('base64');
+var encPlain = B.rsaEncrypt('test123', b64Plain, jwkPad.e, 'pkcs1');
+t('128 字节模数 → 密文 128 字节', Buffer.from(encPlain, 'base64').length === 128,
+  Buffer.from(encPlain, 'base64').length);
+t('128 字节模数 → 私钥能解开',
+  crypto.privateDecrypt({ key: kpPad.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(encPlain, 'base64')).toString() === 'test123');
+
+// 两种口径都能解出「合理位长」时的选择：仍然解成 128 字节、私钥能开
+var encBoth = B.rsaEncrypt('test123', b64Plain, jwkPad.e, 'pkcs1');
+t('base64 模数密文与 hex 口径一致可用',
+  crypto.privateDecrypt({ key: kpPad.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(encBoth, 'base64')).toString() === 'test123');
+
+// 过长密码必须抛错，不能静默截断（1024 位 → 上限 128-11 = 117 字节）
+var tooLong = new Array(201).join('a');                 // 200 个 'a'
+var threwLong = false;
+try { B.rsaEncrypt(tooLong, b64Padded, jwkPad.e, 'pkcs1'); }
+catch (e) { threwLong = /RSA 分组上限/.test(e.message); }
+t('200 字节 ASCII 密码必须抛「超出分组上限」而不是静默截断', threwLong);
+
+var exact = new Array(118).join('a');                   // 117 个 'a'，刚好到上限
+var encExact = B.rsaEncrypt(exact, b64Padded, jwkPad.e, 'pkcs1');
+t('117 字节 ASCII（刚好上限）能加密且解回完全一致',
+  crypto.privateDecrypt({ key: kpPad.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(encExact, 'base64')).toString() === exact);
+
 console.log('\n[7] 存储');
 S.add({ name: '测试课', day: 1, start: 1, end: 2, weeks: '1-16' });
 t('写入 1 条', S.courses().length === 1);

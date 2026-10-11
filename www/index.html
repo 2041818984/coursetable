@@ -23,8 +23,8 @@
       <button class="ic" id="btnAdd" aria-label="添加课程" title="添加课程">
         <svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg>
       </button>
-      <button class="ic" id="btnToday" aria-label="回到本周" title="回到本周">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 2"/></svg>
+      <button class="ic" id="btnImport" aria-label="导入课表" title="导入课表">
+        <svg viewBox="0 0 24 24"><path d="M12 4v10M8 10l4 4 4-4"/><path d="M5 18h14"/></svg>
       </button>
       <button class="ic" id="btnShare" aria-label="导出 / 分享课表" title="导出 / 分享课表">
         <svg viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4M5 14v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5"/></svg>
@@ -37,7 +37,7 @@
 
   <div class="grid-wrap">
     <div class="grid-head">
-      <div class="corner"><span id="monthLabel">10月</span></div>
+      <div class="corner"><span id="monthLabel">10</span><b>月</b></div>
       <div class="dow" data-dow="1"><b>一</b><i>1</i></div>
       <div class="dow" data-dow="2"><b>二</b><i>2</i></div>
       <div class="dow" data-dow="3"><b>三</b><i>3</i></div>
@@ -45,6 +45,8 @@
       <div class="dow" data-dow="5"><b>五</b><i>5</i></div>
       <div class="dow" data-dow="6"><b>六</b><i>6</i></div>
       <div class="dow" data-dow="7"><b>日</b><i>7</i></div>
+      <!-- 右边缘浮动：一键回到本周（挂表头里，保证不压课程卡） -->
+      <button class="week-fab" id="btnToday" aria-label="回到本周" title="回到本周" hidden>回到本周</button>
     </div>
     <div class="grid-scroll">
       <div class="grid-body" id="gridBody">
@@ -141,10 +143,14 @@
 
     <div class="card">
       <h3 class="card-h">AI 识别（图片导入用，可选）</h3>
+      <label class="row"><span>服务商</span>
+        <select id="setApiPreset"><option value="">— 选一个，自动填好地址和模型 —</option></select>
+      </label>
       <label class="row"><span>接口地址</span><input type="text" id="setApiBase" placeholder="https://api.openai.com/v1"></label>
       <label class="row"><span>模型名</span><input type="text" id="setApiModel" placeholder="gpt-4o-mini"></label>
       <label class="row"><span>API Key</span><input type="password" id="setApiKey" placeholder="sk-..."></label>
-      <p class="hint">填 OpenAI 兼容的地址即可（以 <code>/v1</code> 结尾，App 会自动接 <code>/chat/completions</code>）。Key 只保存在本机，不会上传到任何其他服务器。</p>
+      <p class="hint">填 OpenAI 兼容的地址即可（以 <code>/v1</code> 结尾，App 会自动接 <code>/chat/completions</code>）。<b>模型必须支持图片输入</b>（vision），例如 <code>gpt-4o-mini</code> / <code>glm-4v-flash</code> / <code>qwen-vl-plus</code>；纯文本模型喂图片会报错。Key 只保存在本机，不会上传。</p>
+      <p class="hint">不想配 API 也没关系：<b>本地 OCR 完全离线、无需任何配置</b>，图片识别失败时 App 会自动回退到它。</p>
       <div class="row btns" style="margin-top:6px">
         <button class="btn block" id="btnTestApi">测试连接</button>
       </div>
@@ -167,9 +173,18 @@
 
 <!-- 底部导航 -->
 <nav class="tabbar">
-  <button class="tab active" data-goto="page-schedule"><span>📅</span>课表</button>
-  <button class="tab" data-goto="page-import"><span>⬇️</span>导入</button>
-  <button class="tab" data-goto="page-settings"><span>⚙️</span>设置</button>
+  <button class="tab active" data-goto="page-schedule">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/></svg>
+    <span>课表</span>
+  </button>
+  <button class="tab" data-goto="page-import">
+    <svg viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 19h16"/></svg>
+    <span>导入</span>
+  </button>
+  <button class="tab" data-goto="page-settings">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5 5l2.1 2.1M16.9 16.9 19 19M19 5l-2.1 2.1M7.1 16.9 5 19"/></svg>
+    <span>设置</span>
+  </button>
 </nav>
 
 <!-- ============ 弹层：教务导入 ============ -->

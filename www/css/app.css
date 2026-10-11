@@ -68,13 +68,15 @@ button{cursor:pointer}
 .grid-wrap{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--card)}
 
 .grid-head{
-  display:grid;grid-template-columns:44px repeat(var(--cols,7),1fr);
-  background:var(--card);border-bottom:1px solid var(--line);
+  display:grid;grid-template-columns:44px repeat(var(--cols,7),minmax(0,1fr));
+  background:var(--card);border-bottom:1px solid var(--line);position:relative;
 }
 .grid-head .corner{
-  display:flex;align-items:flex-end;justify-content:center;
-  font-size:11px;color:var(--tx2);padding-bottom:8px;font-weight:500;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  font-size:11px;color:var(--tx2);font-weight:600;line-height:1.05;
 }
+.grid-head .corner #monthLabel{font-size:15px;color:var(--tx);font-weight:700;letter-spacing:-.3px}
+.grid-head .corner b{font-size:10px;font-weight:400;color:var(--tx3)}
 .dow{padding:4px 0 6px;text-align:center}
 .dow b{display:block;font-size:11px;font-weight:400;color:var(--tx3)}
 .dow i{
@@ -88,7 +90,7 @@ button{cursor:pointer}
 .grid-scroll::-webkit-scrollbar{display:none;width:0;height:0}
 
 .grid-body{
-  display:grid;grid-template-columns:44px repeat(var(--cols,7),1fr);
+  display:grid;grid-template-columns:44px repeat(var(--cols,7),minmax(0,1fr));
   grid-auto-rows:58px;position:relative;
 }
 .cell{border-bottom:1px solid var(--line);border-left:1px solid var(--line);position:relative}
@@ -104,31 +106,47 @@ button{cursor:pointer}
 #gridBody .pt span{font-size:8.5px;color:var(--tx2);line-height:1.15;letter-spacing:-.2px}
 #gridBody .pt span.e{color:var(--tx3)}
 
-/* 课程卡片：外层 .course 只负责定位（含并排分列），内层 .cb 负责观感 */
-.course{position:absolute;top:0;bottom:0;padding:2px 1px;box-sizing:border-box}
+/* 课程卡片：外层 .course 是**普通 grid item**，占自己那一列（grid-column: N / span 1），
+   靠 position:relative 的 left 偏移做同簇并排分列；内层 .cb 负责观感。
+   注意：不能再让它 position:absolute —— 绝对定位下 grid-column 只给起始线时，
+   包含块会被解释成「起始列→最后一列」，width:100% 会横铺到整行。 */
+.course{position:relative;box-sizing:border-box;padding:2px 1px;min-width:0}
 .cb{
-  width:100%;height:100%;border-radius:9px;padding:5px 6px;position:relative;overflow:hidden;
-  display:flex;flex-direction:column;color:#fff;font-size:11px;line-height:1.25;
+  width:100%;height:100%;border-radius:10px;padding:5px 6px;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;color:#fff;font-size:11px;line-height:1.25;min-width:0;
   box-shadow:0 1px 4px rgba(30,40,70,.14);
 }
 .cb b{
-  font-weight:600;font-size:12px;word-break:break-all;
-  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;
+  font-weight:700;font-size:12px;word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
 }
 .cb .pl{
   opacity:.93;font-size:10px;margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
-/* 单双周 / 非本周角标：贴卡片底部居中 */
+/* 单双周 / 非本周角标：贴卡片**左下角**的小胶囊 */
 .cb .wk{
-  position:absolute;left:50%;bottom:3px;transform:translateX(-50%);
+  position:absolute;left:4px;bottom:3px;
   font-style:normal;font-size:9px;line-height:1;padding:2px 6px;border-radius:7px;
   background:rgba(255,255,255,.32);color:#fff;white-space:nowrap;font-weight:500;
 }
-/* 非本周的课：整卡淡化，底部改标「非本周」 */
-.course.off{opacity:.42}
+/* 非本周的课：整卡淡化，左下角改标「非本周」 */
+.course.off{opacity:.55}
 .course.off .wk{background:rgba(255,255,255,.6);color:rgba(20,26,44,.62)}
 .course:active .cb{filter:brightness(.94)}
+
+/* 右边缘浮动「回到本周」：挂在表头带里、锚在表头底边之上，
+   向上展开（必要时溢进顶栏，那里也没有课卡），**绝不会落到 #gridBody 里压住课程卡**。
+   只在不在当前周时由 render() 取消 hidden。 */
+.week-fab{
+  position:absolute;right:3px;bottom:4px;
+  writing-mode:vertical-rl;letter-spacing:.5px;
+  border:0;border-radius:9px;
+  background:var(--brand);color:#fff;font-size:10px;font-weight:500;line-height:1;
+  padding:5px 4px;box-shadow:0 3px 10px rgba(79,110,247,.32);z-index:6;
+}
+.week-fab[hidden]{display:none}
+.week-fab:active{background:#4160e0}
 
 /* ---------- 空态 ---------- */
 .empty-hint{
@@ -233,9 +251,13 @@ button{cursor:pointer}
 }
 .tab{
   flex:1;border:0;background:none;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:2px;color:var(--tx3);font-size:11px;
+  align-items:center;justify-content:center;gap:3px;color:var(--tx3);font-size:11px;
 }
-.tab span{font-size:20px;line-height:1}
+.tab svg{
+  width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round;
+}
+.tab span{font-size:11px;line-height:1}
 .tab.active{color:var(--brand)}
 
 /* ---------- 弹层 ---------- */

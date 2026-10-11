@@ -57,22 +57,25 @@
     return tessPromise;
   }
 
-  /* ---------- 图片压缩 ---------- */
-  function compress(dataUrl, maxSide) {
+  /* ---------- 图片压缩 ----------
+     maxSide = 长边上限；quality = JPEG 质量；force = 即使尺寸已够小也强制重编码。
+     AI 识别要 force=true：网关对请求体大小很敏感，payload 太大常被直接拒掉。 */
+  function compress(dataUrl, maxSide, quality, force) {
     maxSide = maxSide || 1600;
+    quality = quality || 0.86;
     return new Promise(function (resolve) {
       var img = new Image();
       img.onload = function () {
         var w = img.width, h = img.height;
         var scale = Math.min(1, maxSide / Math.max(w, h));
-        if (scale >= 1 && dataUrl.length < 900000) return resolve(dataUrl);
+        if (!force && scale >= 1 && dataUrl.length < 900000) return resolve(dataUrl);
         var cw = Math.round(w * scale), ch = Math.round(h * scale);
         var cv = document.createElement('canvas');
         cv.width = cw; cv.height = ch;
         var ctx = cv.getContext('2d');
         ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
         ctx.drawImage(img, 0, 0, cw, ch);
-        resolve(cv.toDataURL('image/jpeg', 0.86));
+        resolve(cv.toDataURL('image/jpeg', quality));
       };
       img.onerror = function () { resolve(dataUrl); };
       img.src = dataUrl;
@@ -411,6 +414,21 @@
     '5. 输出示例：[{"name":"高等数学","teacher":"张三","place":"A101","day":1,"start":1,"end":2,"weeks":"1-16"}]'
   ].join('\n');
 
+  /* 常见服务商预设：选中后自动填好「接口地址 + 常用模型名」。
+     ⚠ 前提是模型必须支持「图片输入」（vision）——纯文本模型喂图片会报错。
+     warn 字段：该预设**不支持图片**，只能用于「测试连接」，选中时会明确提示。
+     本地 OCR 不需要任何配置，是永远可用的兜底。 */
+  var PROVIDERS = [
+    { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+    {
+      id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
+      warn: 'DeepSeek 目前没有支持图片输入的模型，此预设只能用于「测试连接」，图片识别请改选 OpenAI / 智谱 GLM / 阿里通义。'
+    },
+    { id: 'zhipu', name: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash' },
+    { id: 'qwen', name: '阿里通义千问', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-vl-plus' },
+    { id: 'custom', name: '自定义', base: '', model: '' }
+  ];
+
   /** 把用户填的接口地址拼成 chat/completions 的完整 URL。 */
   function chatUrl(base) {
     var b = String(base || '').trim().replace(/\/+$/, '');
@@ -584,24 +602,44 @@
     var base = ((cfg && cfg.base) || '').trim();
     var key = ((cfg && cfg.key) || '').trim();
     var model = ((cfg && cfg.model) || '').trim() || 'gpt-4o-mini';
-    if (!base) return Promise.reject(new Error('请先在「设置 → AI 识别」里填写接口地址'));
+    if (!base) {
+      return Promise.reject(new Error(
+        '请先在「设置 → AI 识别」里填写接口地址（图片识别需要「支持图片输入」的模型，例如 gpt-4o-mini / glm-4v-flash / qwen-vl-plus）。\n' +
+        '也可以改用「本地 OCR（离线）」，它不需要任何配置。'
+      ));
+    }
     var url = chatUrl(base);
 
     if (onProgress) onProgress('正在压缩图片…');
-    return compress(dataUrl, 1024).then(function (small) {
+    return compress(dataUrl, 1280, 0.8, true).then(function (small) {
+      var kb = Math.round(small.length / 1024);
+      // 把压缩后的 base64 长度打进日志：payload 太大是最常见的「网关拒绝」原因
+      if (onProgress) onProgress('图片已压缩：长边 ≤1280、质量 0.8，base64 约 ' + kb + ' KB');
+
+      var messages = [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: small } },
+          { type: 'text', text: PROMPT }
+        ]
+      }];
+      // 请求体尽量精简：只发 model + messages。第一次带 temperature，
+      // 若网关不喜欢可选参数（有些中转会因此报 code/message 错误），退到最简体再试一次。
+      var fullBody = JSON.stringify({ model: model, temperature: 0, messages: messages });
+      var minBody = JSON.stringify({ model: model, messages: messages });
+
       if (onProgress) onProgress('已发送给模型，等待返回…');
-      var body = JSON.stringify({
-        model: model,
-        temperature: 0,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: small } },
-            { type: 'text', text: PROMPT }
-          ]
-        }]
+      return postChat(url, key, fullBody, 1).then(function (res) {
+        var b = parseBody(res.data);
+        var err = digError(b);
+        var content = b ? digContent(b) : '';
+        var httpBad = res.status >= 400;
+        if ((httpBad || (!content && err)) && fullBody !== minBody) {
+          if (onProgress) onProgress('首次请求未成功，去掉可选参数（temperature 等）重试一次…');
+          return postChat(url, key, minBody, 1);
+        }
+        return res;
       });
-      return postChat(url, key, body, 1);
     }).then(function (res) {
       var b = parseBody(res.data);
       var err = digError(b);
@@ -618,7 +656,7 @@
           '\n\n怎么排查：\n' +
           '· 到「设置 → AI 识别」点「测试连接」，能立刻复现同样的错误\n' +
           '· 多半是模型名写错、该模型不支持图片输入、余额不足，或中转网关自身故障\n' +
-          '· 也可以改用「本地 OCR（离线）」，完全不依赖网络和 API Key'
+          '· 也可以改用「本地 OCR（离线）」——它不需要任何配置，图片识别会自动回退过去'
         );
       }
 
@@ -650,8 +688,7 @@
     });
   }
 
-  /** 设置页「测试连接」：发一条最小请求，把服务端的原话展示出来。 */
-  function testApi(cfg) {
+  /** 设置页「测试连接」：发一条最小请求，把服务端的原话展示出来。 */  function testApi(cfg) {
     var base = ((cfg && cfg.base) || '').trim();
     var key = ((cfg && cfg.key) || '').trim();
     var model = ((cfg && cfg.model) || '').trim() || 'gpt-4o-mini';
@@ -686,6 +723,7 @@
     loadTesseract: loadTesseract,
     detectGrid: detectGrid,
     stripGridLines: stripGridLines,
-    buildCourses: buildCourses
+    buildCourses: buildCourses,
+    PROVIDERS: PROVIDERS
   };
 })(window);

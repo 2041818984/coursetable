@@ -9,7 +9,8 @@
   },
   "android": {
     "allowMixedContent": true,
-    "webContentsDebuggingEnabled": true
+    "webContentsDebuggingEnabled": true,
+    "adjustMarginsForEdgeToEdge": "auto"
   },
   "plugins": {
     "CapacitorHttp": {

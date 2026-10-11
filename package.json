@@ -13,6 +13,7 @@
     "check:jw": "node scripts/live-jw-check.js",
     "check:real": "node scripts/live-jw-real.js",
     "check:kb": "node scripts/check-real-kb.js",
+    "check:layout": "node scripts/layout-check.js",
     "probe:login": "python scripts/probe-hntou-login.py",
     "probe:kb": "python scripts/probe-hntou-kb.py",
     "fixtures": "python scripts/make-test-pdf.py && python scripts/make-test-ocr-image.py",
