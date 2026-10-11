@@ -161,7 +161,11 @@
       }
     }
 
-    var all = S.courses().filter(function (c) { return c.day <= days; });
+    var all = S.courses().filter(function (c) {
+      if (c.day > days) return false;
+      if (c.weeks && c.weeks.length && Math.max.apply(null, c.weeks) < state.week) return false;
+      return true;
+    });
     for (var d3 = 1; d3 <= days; d3++) {
       var dayList = all.filter(function (c) { return c.day === d3; });
       if (!dayList.length) continue;
@@ -191,7 +195,7 @@
     el.dataset.id = c.id;
 
     var cb = document.createElement('div');
-    cb.className = 'cb';
+    cb.className = 'cb' + (lanes > 1 ? ' narrow' : '');
     cb.style.background = c.color || S.colorFor(c.name);
 
     var b = document.createElement('b');

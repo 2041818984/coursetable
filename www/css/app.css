@@ -122,7 +122,7 @@ button{cursor:pointer}
 }
 .cb .pl{
   opacity:.93;font-size:10px;margin-top:2px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  white-space:normal;word-break:break-all;line-height:1.2;
 }
 /* 单双周 / 非本周角标：贴卡片**左下角**的小胶囊 */
 .cb .wk{
@@ -133,6 +133,8 @@ button{cursor:pointer}
 /* 非本周的课：整卡淡化，左下角改标「非本周」 */
 .course.off{opacity:.55}
 .course.off .wk{background:rgba(255,255,255,.6);color:rgba(20,26,44,.62)}
+.cb.narrow b{font-size:10px;-webkit-line-clamp:4}
+.cb.narrow .pl{font-size:8.5px}
 .course:active .cb{filter:brightness(.94)}
 
 /* 右边缘浮动「回到本周」：挂在表头带里、锚在表头底边之上，
