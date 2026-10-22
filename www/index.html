@@ -57,8 +57,8 @@
 
   <div class="empty-hint" id="emptyHint">
     <div class="eh-icon">📚</div>
-    <p>还没有课程</p>
-    <button class="btn primary" data-goto="page-import">去导入课表</button>
+    <p id="emptyHintText">还没有课程</p>
+    <button class="btn primary" id="emptyHintGoImport" data-goto="page-import">去导入课表</button>
   </div>
 </section>
 
@@ -123,7 +123,9 @@
       <h3 class="card-h">学期</h3>
       <label class="row"><span>总周数</span><input type="number" id="setTotalWeeks" min="1" max="40"></label>
       <label class="row"><span>第一周开始日期</span><input type="date" id="setStartDate"></label>
-      <label class="row"><span>当前周</span><input type="number" id="setCurrentWeek" min="1" max="40"></label>
+      <label class="row"><span>当前周</span><input type="number" id="setCurrentWeek" min="1" max="40" placeholder="留空 = 按日期自动算"></label>
+      <label class="row"><span>自动跳到本周</span><input type="checkbox" id="setAutoJumpThisWeek"></label>
+      <p class="hint">打开 App 会自动跳到本周；关掉开关则保留你上次翻到的周次，下次打开接着看。「当前周」留空时按上面的开学日期推算，手动填了就以手填的为准（适合开学日期还没设或不准时用）。</p>
     </div>
 
     <div class="card">

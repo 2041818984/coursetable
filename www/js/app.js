@@ -47,12 +47,45 @@
   }
 
   function autoCurrentWeek() {
+    var total = S.settings().totalWeeks || 20;
+    // 用户在设置页手填了「当前周」就以手填的为准：开学日期没设 / 设错时靠它兜底。
+    // 留空（0）才按开学日期推算。
+    var manual = parseInt(S.settings().currentWeek, 10);
+    if (manual > 0) return Math.min(total, manual);
     var s = new Date(S.settings().startDate + 'T00:00:00');
     if (isNaN(s)) return 1;
     var now = new Date();
     now.setHours(0, 0, 0, 0);
     var diff = Math.floor((now - s) / 86400000);
-    return Math.min(S.settings().totalWeeks, Math.max(1, Math.floor(diff / 7) + 1));
+    return Math.min(total, Math.max(1, Math.floor(diff / 7) + 1));
+  }
+
+  /* 「打开时自动跳到本周」开关。默认开；老数据没有这个字段时也算开。 */
+  function jumpThisWeekOn() {
+    return S.settings().autoJumpThisWeek !== false;
+  }
+
+  /* 关掉开关时用来恢复的「上次看到第几周」。没记录 / 越界都返回 0。 */
+  function rememberedWeek() {
+    var v = parseInt(S.settings().lastWeek, 10);
+    if (!v || v < 1) return 0;
+    return Math.min(v, S.settings().totalWeeks || 20);
+  }
+
+  /* 打开时该显示第几周：开着自动跳本周 → 本周；
+     关掉 → 上次翻到的那一周（没记录就还是本周）。 */
+  function startupWeek() {
+    return jumpThisWeekOn() ? autoCurrentWeek() : (rememberedWeek() || autoCurrentWeek());
+  }
+
+  /* 翻周统一走这里：只改内存里的 state.week。
+     只有关掉「打开时自动跳到本周」时，才把这次的周次记下来，供下次打开恢复。 */
+  function setWeek(n) {
+    state.week = n;
+    if (!jumpThisWeekOn()) {
+      S.settings().lastWeek = n;
+      S.save();
+    }
   }
 
   function addDays(d, n) {
@@ -166,16 +199,52 @@
       if (c.weeks && c.weeks.length && Math.max.apply(null, c.weeks) < state.week) return false;
       return true;
     });
+    // 真正渲染出来的卡片数：非本周的课在 courseEl() 里直接 return null，
+    // 所以不能用 all.length 代替，必须数真正 append 进 frag 的那些。
+    var cards = 0;
     for (var d3 = 1; d3 <= days; d3++) {
       var dayList = all.filter(function (c) { return c.day === d3; });
       if (!dayList.length) continue;
       layoutDay(dayList).forEach(function (grp) {
-        grp.list.forEach(function (c) { var el = courseEl(c, grp.lanes, total); if (el) frag.appendChild(el); });
+        grp.list.forEach(function (c) {
+          var el = courseEl(c, grp.lanes, total);
+          if (el) { frag.appendChild(el); cards++; }
+        });
       });
     }
 
     body.appendChild(frag);
-    $('emptyHint').style.display = S.courses().length ? 'none' : 'block';
+
+    // 本周按周次算是「有课」，但这些课在周末、而「显示周末」被关掉了：
+    // 它们在上面的 c.day > days 一步就被过滤掉，压根没走到 courseEl()。
+    // 这种情况不是「没排课」，是「没显示」，得跟真正的空周分开说。
+    var hiddenByDisplay = S.courses().filter(function (c) {
+      var inWeek = !c.weeks.length || c.weeks.indexOf(state.week) >= 0;
+      return inWeek && c.day > days;
+    }).length;
+
+    updateEmptyHint(cards, hiddenByDisplay);
+  }
+
+  /* 空态提示。三种「空」要分开说，否则用户会以为课表数据坏了：
+     - 一门课都没有（全新用户）→ 引导他去导入课表；
+     - 这一周确实没排课 → 说明这周没课；
+     - 这一周有课，但课在周末而「显示周末」被关掉了 → 说清是「没显示」，并指条路。
+     后两种都不能再给「去导入课表」——他明明有课，让人去导入是误导。 */
+  function updateEmptyHint(cards, hiddenByDisplay) {
+    var hasCourse = S.courses().length > 0;
+    if (hasCourse && cards > 0) { $('emptyHint').style.display = 'none'; return; }
+    $('emptyHint').style.display = 'block';
+    if (!hasCourse) {
+      $('emptyHintText').textContent = '还没有课程';
+      $('emptyHintGoImport').style.display = '';
+      return;
+    }
+    $('emptyHintText').textContent = hiddenByDisplay > 0
+      ? '第 ' + state.week + ' 周有 ' + hiddenByDisplay + ' 门课，但不在当前显示范围内。' +
+        '可在「设置 → 显示」里打开「显示周末」'
+      : '第 ' + state.week + ' 周没有安排课程';
+    $('emptyHintGoImport').style.display = 'none';
   }
 
   /* 一门课的一张卡片。lanes = 同簇总列数，c._lane = 自己占第几列。 */
@@ -184,7 +253,7 @@
     if (!inWeek) return null;  // 非本周的课直接不显示
 
     var el = document.createElement('div');
-    el.className = 'course' + (inWeek ? '' : ' off');
+    el.className = 'course';
     // 结束线必须写死成 span 1：只给起始线时，绝对/相对定位的包含块会被当成「起始列→最后一列」，
     // 卡片就会横铺整行、互相覆盖。写上 span 1 后，卡片严格只占自己那一列。
     el.style.gridColumn = (c.day + 1) + ' / span 1';
@@ -211,12 +280,8 @@
     }
 
     var tag = '';
-    if (!inWeek) {
-      tag = '非本周';                       // 本周不上 → 整卡淡化
-    } else {
-      var par = S.courseParity(c, total);   // 显式单双周标记优先
-      if (par) tag = par === 1 ? '单周' : '双周';
-    }
+    var par = S.courseParity(c, total);     // 显式单双周标记优先
+    if (par) tag = par === 1 ? '单周' : '双周';
     if (tag) {
       var wk = document.createElement('i');
       wk.className = 'wk';
@@ -793,7 +858,10 @@
     var st = S.settings();
     $('setTotalWeeks').value = st.totalWeeks;
     $('setStartDate').value = st.startDate;
-    $('setCurrentWeek').value = autoCurrentWeek();
+    // 手填了才显示数字，没填就留空（留空 = 按开学日期自动算）
+    var manualWeek = parseInt(st.currentWeek, 10);
+    $('setCurrentWeek').value = manualWeek > 0 ? manualWeek : '';
+    $('setAutoJumpThisWeek').checked = jumpThisWeekOn();
     $('setShowWeekend').checked = !!st.showWeekend;
     $('setPeriods').value = st.periods;
     $('setTimes').value = (st.periodTimes && st.periodTimes.length ? st.periodTimes : S.DEFAULT_TIMES).join('\n');
@@ -819,12 +887,35 @@
       });
     }
     bindNum('setTotalWeeks', 'totalWeeks');
-    bindNum('setCurrentWeek', 'currentWeek');
     bindNum('setPeriods', 'periods');
+
+    // 「当前周」是手填的兜底值：留空 = 按开学日期自动算（存 0）
+    $('setCurrentWeek').addEventListener('change', function () {
+      var raw = String($('setCurrentWeek').value).trim();
+      var v = raw === '' ? 0 : parseInt(raw, 10);
+      if (v !== 0 && (isNaN(v) || v < 0)) { $('setCurrentWeek').value = ''; v = 0; }
+      S.settings().currentWeek = v;
+      S.save();
+      // 手填或清空都会改变「本周是谁」的判定，开着自动跳本周时立刻跟上
+      if (jumpThisWeekOn()) setWeek(autoCurrentWeek());
+      render();
+    });
+
+    // 打开时自动跳到本周：开着 → 每次打开都是本周；关掉 → 记住并恢复上次看的周次
+    $('setAutoJumpThisWeek').addEventListener('change', function () {
+      var on = !!$('setAutoJumpThisWeek').checked;
+      var st = S.settings();
+      st.autoJumpThisWeek = on;
+      if (on) setWeek(autoCurrentWeek());   // 立刻跳过去，让用户看到开关的效果
+      else st.lastWeek = state.week;        // 记下当前位置，下次打开接着看
+      S.save();
+      render();
+      toast(on ? '以后打开会跳到本周' : '以后打开会回到上次看的周次');
+    });
 
     $('setStartDate').addEventListener('change', function () {
       S.settings().startDate = $('setStartDate').value; S.save();
-      state.week = autoCurrentWeek(); render();
+      setWeek(autoCurrentWeek()); render();
     });
     $('setShowWeekend').addEventListener('change', function () {
       S.settings().showWeekend = $('setShowWeekend').checked; S.save(); render();
@@ -895,8 +986,18 @@
         Bridge.readFileAsText(f).then(function (t) {
           var d = JSON.parse(t);
           if (!d || !Array.isArray(d.courses)) throw new Error('不是有效的课表文件');
-          if (d.settings) { for (var k in d.settings) S.settings()[k] = d.settings[k]; }
+          if (d.settings) {
+            for (var k in d.settings) S.settings()[k] = d.settings[k];
+            // 老版本备份里的 currentWeek 存的是「上次看到的周次」，
+            // 直接带进来又会把 App 钉死在那一周，导入时按老数据处理掉。
+            if (d.settings.autoJumpThisWeek === undefined) {
+              S.settings().currentWeek = 0;
+              S.settings().lastWeek = 0;
+              S.settings().autoJumpThisWeek = true;   // 和 store.load() 的迁移规则保持一致
+            }
+          }
           S.replaceAll(d.courses);
+          state.week = startupWeek();     // 备份里带了周次设置，按和启动时一样的规则落到位
           loadSettingsUI(); render();
           toast('已导入 ' + d.courses.length + ' 门课程');
         }).catch(function (e) { toast('导入失败：' + e.message); });
@@ -925,7 +1026,7 @@
     // 课表顶栏
     $('btnPickWeek').addEventListener('click', pickWeek);
     $('btnToday').addEventListener('click', function () {
-      state.week = autoCurrentWeek();
+      setWeek(autoCurrentWeek());
       render();
       toast('已回到第 ' + state.week + ' 周');
     });
@@ -1094,7 +1195,7 @@
       var dx = t.clientX - x0, dy = t.clientY - y0;
       // 横向位移要够大、且明显大于纵向，才算切周（否则是在上下滚课表）
       if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
-      state.week += dx < 0 ? 1 : -1;
+      setWeek(state.week + (dx < 0 ? 1 : -1));
       render();
     }, { passive: true });
   }
@@ -1117,7 +1218,7 @@
       b.textContent = i;
       b.onclick = (function (n) {
         return function () {
-          state.week = n; render(); box.remove();
+          setWeek(n); render(); box.remove();
         };
       })(i);
       g.appendChild(b);
@@ -1139,16 +1240,45 @@
     });
   }
 
+  /* 跨周后跳到新的一周：App 常驻后台，过了周末再打开应该直接看到新一周的课。
+     只在课表页跳，用户在别的页面时不打扰他。 */
+  function jumpThisWeekOnResume() {
+    if (!jumpThisWeekOn()) return;
+    if (!$('page-schedule').classList.contains('active')) return;
+    // 正开着弹层（比如「跳到第几周」）时不跳，否则弹层里的高亮会和周次对不上
+    if (document.querySelector('.sheet.open')) return;
+    var target = autoCurrentWeek();
+    if (state.week === target) return;
+    setWeek(target);
+    render();
+    toast('已跳到第 ' + target + ' 周');
+  }
+
+  /* 监听「回到前台」：原生用 Capacitor 的 appStateChange，浏览器用 visibilitychange */
+  function bindAppState() {
+    var App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (App && App.addListener) {
+      App.addListener('appStateChange', function (s) {
+        if (s && s.isActive) jumpThisWeekOnResume();
+      });
+      return;
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) jumpThisWeekOnResume();
+    });
+  }
+
   /* ---------------- 启动 ---------------- */
   function init() {
     S.load();
-    state.week = S.settings().currentWeek || autoCurrentWeek();
-    S.settings().currentWeek = state.week;
-    S.save();
+    // 打开就显示本周：不再从「上次看到第几周」恢复（关掉开关时才恢复）。
+    // 课表为空也不影响——autoCurrentWeek() 只算日期，有没有课都能算出周次。
+    state.week = startupWeek();
 
     bind();
     bindSettings();
     bindBack();
+    bindAppState();
 
     // 列宽是百分比，转屏 / 改变窗口后要重排，否则分列会错位
     window.addEventListener('resize', render);

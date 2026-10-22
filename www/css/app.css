@@ -124,15 +124,12 @@ button{cursor:pointer}
   opacity:.93;font-size:10px;margin-top:2px;
   white-space:normal;word-break:break-all;line-height:1.2;
 }
-/* 单双周 / 非本周角标：贴卡片**左下角**的小胶囊 */
+/* 单双周角标：贴卡片**左下角**的小胶囊 */
 .cb .wk{
   position:absolute;left:4px;bottom:3px;
   font-style:normal;font-size:9px;line-height:1;padding:2px 6px;border-radius:7px;
   background:rgba(255,255,255,.32);color:#fff;white-space:nowrap;font-weight:500;
 }
-/* 非本周的课：整卡淡化，左下角改标「非本周」 */
-.course.off{opacity:.55}
-.course.off .wk{background:rgba(255,255,255,.6);color:rgba(20,26,44,.62)}
 .cb.narrow b{font-size:10px;-webkit-line-clamp:4}
 .cb.narrow .pl{font-size:8.5px}
 .course:active .cb{filter:brightness(.94)}

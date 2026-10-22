@@ -15,7 +15,13 @@
   var DEFAULT_SETTINGS = {
     totalWeeks: 20,
     startDate: mondayOf(new Date()).toISOString().slice(0, 10),
-    currentWeek: 1,
+    // 「当前周」手填值：0 = 不手填，按上面的开学日期自动推算。
+    // 注意它不能再当「上次看到第几周」用——那样 1 是真值，会把 App 永远钉在第 1 周。
+    currentWeek: 0,
+    // 打开 App 时自动跳到本周；关掉就恢复旧行为（记住并恢复上次翻到的周次）
+    autoJumpThisWeek: true,
+    // 关掉上面那个开关时，用它记住「上次看到第几周」。0 = 没记录。
+    lastWeek: 0,
     showWeekend: true,
     periods: 12,
     periodTimes: DEFAULT_TIMES.slice(),
@@ -55,6 +61,19 @@
       data = raw ? JSON.parse(raw) : defaults();
     } catch (e) {
       data = defaults();
+    }
+    // 存储被写残（{"version":1}、{}、甚至一个数）时，下面按字段补齐会在
+    // undefined 上取属性直接抛 TypeError，把 init() 一起带崩、App 打不开。
+    // 这里先把形状补成默认值，宁可丢掉这份数据也不能让用户进不去。
+    if (!data || typeof data !== 'object') data = defaults();
+    if (!data.settings || typeof data.settings !== 'object') data.settings = defaults().settings;
+    // 老版本把「上次翻到的周次」写进 currentWeek 并持久化（默认还就是 1），
+    // 结果每次打开都被钉死在第 1 周。autoJumpThisWeek 是这次新加的字段，
+    // 凡是还没有它的记录一律按老数据处理：清掉那个陈旧的周次，改回按日期推算。
+    if (data.settings.autoJumpThisWeek === undefined) {
+      data.settings.currentWeek = 0;
+      data.settings.autoJumpThisWeek = true;
+      save();
     }
     // 补齐升级过程中可能缺失的字段
     var s = DEFAULT_SETTINGS;

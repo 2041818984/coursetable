@@ -227,6 +227,124 @@ t('更新生效', S.courses()[0].name === '改名');
 S.remove(id);
 t('删除生效', S.courses().length === 0);
 
+console.log('\n[8] 打开即本周的地基：存储默认值与老数据迁移');
+/* Store 的 data 是模块级缓存，要模拟「换一份 localStorage 重新打开」就得重新 require 一次。 */
+function freshStore(raw) {
+  delete require.cache[require.resolve('../www/js/store.js')];
+  global.localStorage = {
+    _d: {},
+    getItem(k) { return Object.prototype.hasOwnProperty.call(this._d, k) ? this._d[k] : null; },
+    setItem(k, v) { this._d[k] = String(v); }
+  };
+  if (raw !== undefined) global.localStorage._d['coursetable_v1'] = raw;
+  require('../www/js/store.js');
+  return { S: global.Store, ls: global.localStorage };
+}
+
+var fresh = freshStore();
+t('默认 currentWeek = 0（不再是 1——1 是真值，会把 App 永远钉在第 1 周）',
+  fresh.S.settings().currentWeek === 0, fresh.S.settings().currentWeek);
+t('默认 autoJumpThisWeek = true（打开即跳本周）',
+  fresh.S.settings().autoJumpThisWeek === true, fresh.S.settings().autoJumpThisWeek);
+t('默认 lastWeek = 0（还没记录上次看到第几周）',
+  fresh.S.settings().lastWeek === 0, fresh.S.settings().lastWeek);
+
+// 老记录：装过旧版本的用户，localStorage 里没有 autoJumpThisWeek 字段
+var legacy = freshStore(JSON.stringify({
+  version: 1,
+  settings: { totalWeeks: 20, startDate: '2026-09-14', currentWeek: 15 },
+  courses: []
+}));
+t('老记录：迁移后 currentWeek 被清成 0',
+  legacy.S.settings().currentWeek === 0, legacy.S.settings().currentWeek);
+t('老记录：迁移后 autoJumpThisWeek = true',
+  legacy.S.settings().autoJumpThisWeek === true, legacy.S.settings().autoJumpThisWeek);
+t('老记录：迁移结果立刻落盘',
+  JSON.parse(legacy.ls.getItem('coursetable_v1')).settings.currentWeek === 0,
+  legacy.ls.getItem('coursetable_v1'));
+t('老记录：其它字段不被迁移动掉',
+  legacy.S.settings().totalWeeks === 20 && legacy.S.settings().startDate === '2026-09-14',
+  [legacy.S.settings().totalWeeks, legacy.S.settings().startDate]);
+
+// 新记录：已经有 autoJumpThisWeek 字段就不能再被当成老数据清掉
+var kept = freshStore(JSON.stringify({
+  version: 1,
+  settings: { totalWeeks: 20, startDate: '2026-09-14', currentWeek: 7, autoJumpThisWeek: false, lastWeek: 3 },
+  courses: []
+}));
+t('新记录：手填的 currentWeek 不被清掉',
+  kept.S.settings().currentWeek === 7, kept.S.settings().currentWeek);
+t('新记录：autoJumpThisWeek = false 原样保留',
+  kept.S.settings().autoJumpThisWeek === false, kept.S.settings().autoJumpThisWeek);
+t('新记录：lastWeek 原样保留', kept.S.settings().lastWeek === 3, kept.S.settings().lastWeek);
+
+// 坏数据：不能让 App 起不来
+var broken = freshStore('not-json{{');
+t('坏 JSON 退回默认值，且 currentWeek 仍是 0',
+  broken.S.settings().currentWeek === 0 && broken.S.settings().autoJumpThisWeek === true,
+  [broken.S.settings().currentWeek, broken.S.settings().autoJumpThisWeek]);
+
+/* 存储被写残时，load() 原来会在「按字段补齐」那一步往 undefined 上取属性，
+   直接抛 TypeError 把 init() 一起带崩、App 打不开。这里把各种残形状都过一遍。 */
+var DIRTY = [
+  ['{"version":1}', '只有 version'],
+  ['{}', '空对象'],
+  ['5', '一个数字'],
+  ['"abc"', '一个字符串'],
+  ['[]', '一个数组'],
+  ['null', 'null'],
+  ['{"courses":[]}', '只有 courses'],
+  ['{"settings":null}', 'settings 是 null'],
+  ['{"settings":{"totalWeeks":20}}', 'settings 是半截对象'],
+  ['not-json{{', '坏 JSON']
+];
+DIRTY.forEach(function (cse) {
+  var got = null, err = null;
+  try {
+    var b = freshStore(cse[0]);
+    var st = b.S.settings();
+    b.S.courses();                       // 顺便触发一次 load 分支
+    got = {
+      cur: st.currentWeek, auto: st.autoJumpThisWeek,
+      total: st.totalWeeks, courses: Array.isArray(b.S.courses())
+    };
+  } catch (e) { err = String((e && e.message) || e); }
+  t('残缺存储 ' + cse[1] + '（' + cse[0] + '）→ load() 不抛异常且字段补齐',
+    err === null && got && got.cur === 0 && got.auto === true &&
+    typeof got.total === 'number' && got.courses === true,
+    err || got);
+});
+
+console.log('\n[9] ES5 合规（老 WebView 里跑，不能有 ES6 语法）');
+/* import-ocr.js 是唯一允许用 ES6 的文件（与本次改动无关，别动它）。 */
+var ES5_FILES = ['app.js', 'store.js', 'bridge.js', 'parser.js', 'import-jw.js', 'import-file.js'];
+var ES6_RULES = [
+  { name: '箭头函数 =>', re: /=>/ },
+  { name: 'let / const / class', re: /(^|[^\w$.])(let|const|class)\s+[A-Za-z_$[]/ },
+  { name: '模板字符串（反引号）', re: /`/ },
+  { name: '可选链 ?.', re: /\?\./ },
+  { name: '展开运算符 ...', re: /\.\.\./ }
+];
+/* 注释里出现 '...'、'=> 图解' 这类字眼不算违规，先扒掉注释再扫 */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1 ');
+}
+ES5_FILES.forEach(function (f) {
+  var src = stripComments(require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'www/js', f), 'utf8'));
+  ES6_RULES.forEach(function (r) {
+    var m = src.match(r.re);
+    if (m) {
+      var at = src.slice(0, m.index).split('\n').length;
+      t(f + ' 不含 ' + r.name, false, f + ':' + at + ' → ' + JSON.stringify(m[0]));
+    } else {
+      t(f + ' 不含 ' + r.name, true);
+    }
+  });
+});
+
 console.log('\n============================');
 console.log('通过 ' + pass + ' 项，失败 ' + fail + ' 项');
 process.exit(fail ? 1 : 0);
